@@ -217,3 +217,7 @@ bert计算精度
 ```shell
 python3 squad/evaluate-v1.1.py --dataset_file squad/dev-v1.1.json --prediction_file squad_eval_out/prediction.json
 ```
+
+## 测量COCO数据集的mAP
+
+python3 ../tool/calc_map.py --anno ../data/coco/instances_val2017.json --log $(RESULTJSON) --image-dir $(IMAGEPATH)
