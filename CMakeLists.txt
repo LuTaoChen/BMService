@@ -32,6 +32,7 @@ set(bmnnsdk_inc_dirs ${BMNNSDK2_TOP}/include
         ${BMNNSDK2_TOP}/include/bmruntime
         ${BMNNSDK2_TOP}/include/bmlib
         ${BMNNSDK2_TOP}/include/opencv/opencv4
+        # /usr/local/include/opencv4/
         ${BMNNSDK2_TOP}/include/ffmpeg
         CACHE INTERNAL "")
 
@@ -45,6 +46,7 @@ if (${TARGET_ARCH} STREQUAL "x86-pcie")
             ${BMNNSDK2_TOP}/lib/opencv/x86
             ${BMNNSDK2_TOP}/lib/thirdparty/x86
             ${BMNNSDK2_TOP}/lib/opencv/x86
+            # /usr/local/lib
             ${BMNNSDK2_TOP}/lib/ffmpeg/x86
             ${BMNNSDK2_TOP}/lib/decode/x86
             CACHE INTERNAL "")
@@ -74,13 +76,6 @@ endif ()
 include_directories(${bmnnsdk_inc_dirs})
 link_directories(${bmnnsdk_link_dirs})
 
-FIND_PACKAGE(OpenMP REQUIRED)
-if(OPENMP_FOUND)
-message("OPENMP FOUND")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS"${CMAKE_EXE_LINKER_FLAGS}${OpenMP_EXE_LINKER_FLAGS}")
-endif()
 
 #add_executable(${CMAKE_PROJECT_NAME} ${MAIN_FILES} ${TOOL_FILES} ${FRAMEWORK_FILES})
 #target_link_libraries(${CMAKE_PROJECT_NAME} ${bmnnsdk_link_libs})

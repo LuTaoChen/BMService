@@ -12,14 +12,15 @@
 #include "BMImageUtils.h"
 #include "BMDetectUtils.h"
 #include "bmcv_api.h"
-#include <omp.h>
-#define NTHREADS 8
 
 using namespace bm;
-#define OUTPUT_RESULT_FILE  "ssd_resnet34_result.json"
+#define OUTPUT_DIR "ssd_resnet34_out"
+#define OUTPUT_IMAGE_DIR  OUTPUT_DIR "/images"
+#define OUTPUT_PREDICTION_DIR  OUTPUT_DIR "/prediction"
+#define OUTPUT_GROUND_TRUTH_DIR OUTPUT_DIR "/groundtruth"
 std::map<size_t, std::string> globalLabelMap;
-std::map<size_t, size_t> categoryInCoco;
-std::map<std::string, size_t> globalImageIdMap;
+std::map<std::string, std::vector<DetectBox>> globalGroundTruth;
+std::set<std::string> globalLabelSet;
 
 struct PriorBox {
     float cx;
@@ -115,6 +116,7 @@ struct SSDResnet34Config {
     size_t nmsTopK = 200;
     size_t maxKeepBoxNum = 200;
     const size_t classNum = 81;
+    std::string savePath = OUTPUT_IMAGE_DIR;
     std::vector<float> priorScales;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
@@ -133,7 +135,7 @@ struct SSDResnet34Config {
             iouThreshold = 0.5;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
-            probThreshold = 0.35;
+            probThreshold = 0.5;
             iouThreshold = 0.5;
             input_scale = inTensor->get_scale();
         }
@@ -220,6 +222,7 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
         auto image = readAlignedImage(ctx->handle, imageName);
         alignedInputs->push_back(image);
     }
+
     centralCropAndResize(ctx->handle, *alignedInputs, cfg.resizedImages, 1.0);
 //    saveImage(cfg.resizedImages[0], "resize.jpg");
 
@@ -264,18 +267,15 @@ void softmax(float* scores, const int* shape, const size_t dim, int axis){
         if(i>axis){ inner *= shape[i]; }
     }
     auto len = shape[axis];
-#pragma omp parallel for collapse(2) num_threads(NTHREADS)
     for(size_t x=0; x<outer; x++){
         for(size_t y=0; y<inner; y++){
             size_t base = x*inner*len + y;
             float sum = 0;
-#pragma omp parallel for num_threads(NTHREADS) reduction(+:sum)
             for(size_t z =0; z<len; z++){
                 size_t offset = base + z*inner;
                 scores[offset] = exp(scores[offset]);
                 sum += scores[offset];
             }
-#pragma omp parallel for num_threads(NTHREADS)
             for(size_t z =0; z<len; z++){
                 size_t offset = base + z*inner;
                 scores[offset]/=sum;
@@ -322,13 +322,9 @@ std::map<size_t, std::vector<std::vector<DetectBox>>> selectBoxes(
         const std::vector<DetectBox>& boxes, const float* rawScoreData,
         size_t batch, size_t classNum, size_t boxNum, float selectThresh) {
     std::map<size_t, std::vector<std::vector<DetectBox>>> result;
-    for(size_t c=1; c<classNum; c++){
-        result[c] = {};
-    }
     for(size_t b=0; b<batch; b++){
         auto batchScoreOffset = b*classNum*boxNum;
         auto boxOffset = b*boxNum;
-#pragma omp parallel for num_threads(NTHREADS) shared(result)
         for(size_t c=1; c<classNum; c++){
             result[c].resize(batch);
             auto& validBoxes = result[c][b];
@@ -339,7 +335,7 @@ std::map<size_t, std::vector<std::vector<DetectBox>>> selectBoxes(
                 if(scoreData[n]<=selectThresh) continue;
                 validBoxes.push_back(boxes[boxOffset + n]);
                 validBoxes.back().confidence = scoreData[n];
-                validBoxes.back().category = categoryInCoco[c-1];
+                validBoxes.back().category = c;
                 validBoxes.back().categoryName = globalLabelMap[c-1];
             }
         }
@@ -365,29 +361,23 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     BM_ASSERT_EQ(outTensors.size(),2);
 
     auto pInputImages = reinterpret_cast<std::vector<bm_image>*>(ctx->getPostExtra());
-    auto boxTensor = outTensors[0];
-    auto scoreTensor = outTensors[1];
-    if(boxTensor->shape(1) != 4){
-        std::swap(boxTensor, scoreTensor);
-    }
-
-    size_t batch =    scoreTensor->shape(0);
-    size_t classNum = scoreTensor->shape(1);
-    size_t boxNum =   scoreTensor->shape(2);
-    BM_ASSERT_EQ(boxTensor->shape(0), batch);
-    BM_ASSERT_EQ(boxTensor->shape(1), 4);
-    BM_ASSERT_EQ(boxTensor->shape(2), boxNum);
+    size_t batch =    outTensors[0]->shape(0);
+    size_t classNum = outTensors[0]->shape(1);
+    size_t boxNum =   outTensors[0]->shape(2);
+    BM_ASSERT_EQ(outTensors[1]->shape(0), batch);
+    BM_ASSERT_EQ(outTensors[1]->shape(1), 4);
+    BM_ASSERT_EQ(outTensors[1]->shape(2), boxNum);
 
     // [batch, classNum, boxNum]
-    auto scoreData = scoreTensor->get_float_data();
+    auto scoreData = outTensors[0]->get_float_data();
     // [batch, 4, boxNum]
-    auto rawBoxData = boxTensor->get_float_data();
+    auto rawBoxData = outTensors[1]->get_float_data();
 
     // decode boxes to [0, 1]
     auto boxes = decodeBoxes(batch, rawBoxData, cfg.priorBoxes, cfg.priorScales);
 
     // softmax scores
-    auto scoreShape = scoreTensor->get_shape();
+    auto scoreShape = outTensors[0]->get_shape();
     softmax(scoreData, scoreShape->dims, scoreShape->num_dims, 1);
 
     auto classifiedBoxes = selectBoxes(boxes, scoreData, batch, classNum, boxNum, cfg.probThreshold);
@@ -410,10 +400,7 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
         result = topkValues(result.data(), result.size(), cfg.maxKeepBoxNum);
         auto inputHeight = pInputImages->at(b).height;
         auto inputWidth = pInputImages->at(b).width;
-        auto name = baseName(rawIn[b]);
-        auto imageId = globalImageIdMap[name];
         for(auto& r: result){
-            r.imageId = imageId;
             r.xmin *= inputWidth;
             r.xmax *= inputWidth;
             r.ymin *= inputHeight;
@@ -422,10 +409,10 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     }
 
     // draw rectangle
-//    for(size_t b=0; b<batch; b++){
-//        auto name = baseName(rawIn[b]);
-//        drawDetectBoxEx(pInputImages->at(b), batchResult[b], globalGroundTruth[name], cfg.savePath+"/"+name);
-//    }
+    for(size_t b=0; b<batch; b++){
+        auto name = baseName(rawIn[b]);
+        drawDetectBoxEx(pInputImages->at(b), batchResult[b], globalGroundTruth[name], cfg.savePath+"/"+name);
+    }
 
     // clear extra data
     for(size_t i=0; i<pInputImages->size(); i++) {
@@ -435,22 +422,34 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     return true;
 }
 
-bool resultProcess(const PostOutType& out, std::vector<DetectBox>& allPredictions){
+bool resultProcess(const PostOutType& out){
     if(out.rawIns.empty()) return false;
-    auto batch = out.rawIns.size();
-    for(auto b=0; b<batch; b++){
-        auto name = baseName(out.rawIns[b]);
-        BMLOG(INFO, "'%s' result", name.c_str());
-        for(auto& box: out.results[b]){
-            auto label = std::to_string(box.category);
-            if(box.categoryName != ""){
-                label += "-" + box.categoryName;
-            }
-            label+= ":" + std::to_string(box.confidence);
-            BMLOG(INFO, "  box [%d, %d, %d, %d], %s",
-                  (size_t)box.xmin, (size_t)box.ymin, (size_t)box.xmax, (size_t)box.ymax, label.c_str());
+    auto imageNum = out.rawIns.size();
+    for(size_t i=0; i<imageNum; i++){
+        auto name = baseName(out.rawIns[i]);
+        if(!globalGroundTruth.count(name)) {
+            BMLOG(WARNING, "cannot find %s in ground true info", name.c_str());
+            continue;
         }
-        allPredictions.insert(allPredictions.end(), out.results[b].begin(), out.results[b].end());
+        std::string predName = OUTPUT_PREDICTION_DIR "/";
+        predName += name+ ".txt";
+        std::ofstream os(predName);
+        auto& boxes = out.results[i];
+        for(auto& box: boxes){
+            os<<box<<std::endl;
+        }
+
+        std::string gtName = OUTPUT_GROUND_TRUTH_DIR "/";
+        gtName += name + ".txt";
+        std::ofstream gtOs(gtName);
+        auto& gtBoxes = globalGroundTruth.at(name);
+        for(auto& box: gtBoxes){
+            if(!globalLabelSet.count(box.categoryName)) {
+                BMLOG(WARNING, "current prediction does not cover category %s", box.categoryName.c_str());
+                continue;
+            }
+            gtOs<<box<<std::endl;
+        }
     }
     return true;
 }
@@ -466,21 +465,19 @@ int main(int argc, char* argv[]){
     if(argc>2) bmodel = argv[2];
     if(argc>3) refFile = argv[3];
     if(argc>4) labelFile = argv[4];
-    std::vector<DetectBox> allPredictions;
 
+    mkdir(OUTPUT_DIR, 0777);
+    mkdir(OUTPUT_IMAGE_DIR, 0777);
+    mkdir(OUTPUT_PREDICTION_DIR, 0777);
+    mkdir(OUTPUT_GROUND_TRUTH_DIR, 0777);
     globalLabelMap = loadLabels(labelFile);
-    std::map<std::string, size_t> categoryToId;
-    readCocoDatasetInfo(refFile, globalImageIdMap, categoryToId);
-    for(auto& idLabel: globalLabelMap){
-        categoryInCoco[idLabel.first] = categoryToId[idLabel.second];
-        BMLOG(INFO, "%d->%d: %s", idLabel.first, categoryToId[idLabel.second], idLabel.second.c_str());
-    }
+    for(auto &p: globalLabelMap) globalLabelSet.insert(p.second);
+    globalGroundTruth =  readCocoDatasetBBox(refFile);
 
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
     size_t batchSize= runner.getBatchSize();
     ProcessStatInfo info(bmodel);
-    info.start();
     std::thread dataThread([dataPath, batchSize, &runner](){
         forEachBatch(dataPath, batchSize, [&runner](const std::vector<std::string> names){
             return runner.push(names);
@@ -493,7 +490,7 @@ int main(int argc, char* argv[]){
             }
         }
     });
-    std::thread resultThread([&runner, &info, &allPredictions](){
+    std::thread resultThread([&runner, &info](){
         PostOutType out;
         std::shared_ptr<ProcessStatus> status;
         bool stopped = false;
@@ -507,7 +504,7 @@ int main(int argc, char* argv[]){
             }
             if(stopped) break;
             info.update(status, out.rawIns.size());
-            if(!resultProcess(out, allPredictions)){
+            if(!resultProcess(out)){
                 runner.stop(status->deviceId);
             }
             if(runner.allStopped()){
@@ -519,7 +516,6 @@ int main(int argc, char* argv[]){
 
     dataThread.join();
     resultThread.join();
-    saveCocoResults(allPredictions, OUTPUT_RESULT_FILE);
     return 0;
 }
 

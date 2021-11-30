@@ -202,8 +202,8 @@ int main(int argc, char* argv[]){
     set_log_level(INFO);
     std::string topDir = "../";
     std::string dataPath = topDir + "data/ILSVRC2012/images";
-    // std::string bmodel = topDir + "models/resnet50_v1/fix8b_4n.bmodel";
-    std::string bmodel = topDir + "models/resnet101/fix8b_4n.bmodel";
+    // std::string bmodel = topDir + "models/resnet50_v1/fix8b.bmodel";
+    std::string bmodel = topDir + "models/resnet101/compilation_4n.bmodel";
     // std::string bmodel = topDir + "models/resnet50_v1/compilation_4n.bmodel";
     std::string refFile = topDir + "data/ILSVRC2012/val.txt";
     std::string labelFile = topDir + "data/ILSVRC2012/labels.txt";
@@ -213,10 +213,14 @@ int main(int argc, char* argv[]){
     if(argc>4) labelFile = argv[4];
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
-    size_t batchSize = runner.getBatchSize();
-    auto refMap = loadClassRefs(refFile, "");
+    size_t batchSize= runner.getBatchSize();
+    std::string prefix = dataPath;
+    if(prefix[prefix.size()-1] != '/'){
+        prefix += "/";
+    }
+    auto refMap = loadClassRefs(refFile, prefix);
     auto labelMap = loadLabels(labelFile);
-    ProcessStatInfo info(bmodel);
+    ProcessStatInfo info("resnet50");
     Top5AccuracyStat topStat;
     std::thread dataThread([dataPath, batchSize, &runner](){
         forEachBatch(dataPath, batchSize, [&runner](const InType& imageFiles){

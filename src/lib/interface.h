@@ -23,10 +23,6 @@ struct tensor_data_t {
     unsigned int dtype;
     unsigned char* data;
 };
-
-unsigned int available_devices(unsigned int* devices, unsigned int maxNum);
-void runner_use_devices(const unsigned* device_ids, unsigned num);
-unsigned int runner_start_with_batch(const char *bmodel, unsigned int batch);
 unsigned int runner_start(const char* bmodel);
 void runner_stop(unsigned int runner_id);
 int runner_empty(unsigned int runner_id);
@@ -38,14 +34,6 @@ tensor_data_t *runner_get_output(unsigned runner_id, unsigned int *task_id, unsi
 tensor_data_t *runner_try_to_get_output(unsigned runner_id, unsigned int *task_id, unsigned int *output_num, unsigned int *is_valid);
 unsigned int runner_release_output(unsigned int output_num, const tensor_data_t *output_data);
 
-struct blob_info_t {
-    const char *name;
-    int num_dims;
-    int dims[BM_MAX_DIMS_NUM];
-};
-
-blob_info_t *get_input_info(unsigned runner_id, unsigned *num);
-void release_input_info(unsigned runner_id, blob_info_t *);
 
 #ifdef __cplusplus
 }

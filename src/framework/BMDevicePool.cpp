@@ -69,7 +69,11 @@ std::vector<bm_image> BMDeviceContext::allocImagesWithoutMem(
     return images;
 }
 
-std::vector<bm_image> BMDeviceContext::allocImages(int num, int height, int width, bm_image_format_ext format, bm_image_data_format_ext dtype, int align_bytes, int heap_id) {
+std::vector<bm_image> BMDeviceContext::allocImages(int num, int height, int width, 
+                                                    bm_image_format_ext format, 
+                                                    bm_image_data_format_ext dtype, 
+                                                    int align_bytes,
+                                                    int heap_id) {
     auto stride = calcImageStride(height, width, format, dtype, align_bytes);
     std::vector<bm_image> images;
     for(int i=0; i<num; i++){
@@ -82,7 +86,9 @@ std::vector<bm_image> BMDeviceContext::allocImages(int num, int height, int widt
     return images;
 }
 
-std::vector<bm_image> BMDeviceContext::allocAlignedImages(int num, int height, int width, bm_image_format_ext format, bm_image_data_format_ext dtype, int heap_id) {
+std::vector<bm_image> BMDeviceContext::allocAlignedImages(int num, int height, int width, 
+                                                        bm_image_format_ext format, 
+                                                        bm_image_data_format_ext dtype, int heap_id) {
     return allocImages(num, height, width, format, dtype, 64, heap_id);
 }
 
@@ -117,6 +123,7 @@ BMDeviceContext::~BMDeviceContext() {
     }
     bmrt_destroy(pBMRuntime);
     bm_dev_free(handle);
+    
 }
 
 void ProcessStatInfo::update(const std::shared_ptr<ProcessStatus> &status, size_t batch) {
@@ -147,15 +154,22 @@ void ProcessStatInfo::show() {
     //        BMLOG(INFO, "            serialized_time=%gms, avg_serialized_time=%gms", totalDuration/1000.0, (float)totalDuration/1000.0/numSamples);
 
     BMLOG(INFO, "Samples process stat:");
+    int dev_num=0;
     for(auto& p: deviceProcessNum){
         BMLOG(INFO, "  -> device #%d processes %d samples", p.first, p.second);
+        dev_num++;
     }
     BMLOG(INFO, "Average per device:");
+    float avg[3];
     for(size_t i=0; i<durations.size(); i++){
+        avg[i] = durations[i]/1000.0/numSamples;
         BMLOG(INFO, "  -> %s total_time=%gms, avg_time=%gms",
               __phaseMap[i],
-              durations[i]/1000.0, durations[i]/1000.0/numSamples);
+              durations[i]/1000.0, avg[i]);
     }
+    BMLOG(INFO, "device num = %i, Throughput = %g fps",
+              dev_num, dev_num*1000/avg[1]);
+    
 }
 
 void ProcessStatus::reset(){

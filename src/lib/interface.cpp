@@ -44,13 +44,11 @@ struct OutputType {
 bool preProcess(const InputType& input, const TensorVec& inTensors, ContextPtr ctx);
 bool postProcess(const InputType& input, const TensorVec& outTensors, OutputType& postOut, ContextPtr ctx);
 
-std::vector<DeviceId> globalDevices;
 using GeneralRunner = BMDevicePool<InputType, OutputType>;
 struct RunnerInfo {
-    RunnerInfo(const char* bmodel, unsigned int batch = 1):
-        task_id(INVALID_TASK_ID), runner(bmodel, preProcess, postProcess, globalDevices), status(bmodel), batch(batch) {
+    RunnerInfo(const char* bmodel):
+        task_id(INVALID_TASK_ID), runner(bmodel, preProcess, postProcess), status(bmodel) {
         runner.start();
-        status.start();
     }
     unsigned int nextId() {
         task_id++;
@@ -62,7 +60,6 @@ struct RunnerInfo {
 
     GeneralRunner runner;
     ProcessStatInfo status;
-    unsigned int batch;
 };
 
 std::map<unsigned int, std::shared_ptr<RunnerInfo>> globalRunnerInfos;
@@ -75,12 +72,8 @@ bool preProcess(const InputType& input, const TensorVec& inTensors, ContextPtr c
     for(size_t i=0; i<input.num; i++){
         size_t in_mem_size = elem_num(input.tensors[i].shape, input.tensors[i].dims) * dtype_len(input.tensors[i].dtype);
         BM_ASSERT_EQ(inTensors[i]->get_dtype(), input.tensors[i].dtype);
-        if (!inTensors[i]->fill_device_mem(input.tensors[i].data, in_mem_size))
-        {
-            BMLOG(FATAL, "fill device memory \"%s\" failed %d vs %d",
-                  inTensors[i]->name().c_str(), in_mem_size, inTensors[i]->get_mem_size());
-        }
-        inTensors[i]->set_shape(input.tensors[i].shape, input.tensors[i].dims);
+        BM_ASSERT_LE(in_mem_size, inTensors[i]->get_mem_size());
+        inTensors[i]->fill_device_mem(input.tensors[i].data, in_mem_size);
     }
     return true;
 }
@@ -115,16 +108,12 @@ bool postProcess(const InputType& input, const TensorVec& outTensors, OutputType
     return true;
 }
 
-unsigned int runner_start_with_batch(const char *bmodel, unsigned int batch) {
+unsigned int runner_start(const char *bmodel) {
     set_env_log_level();
     unsigned int runner_id = 0;
     while(globalRunnerInfos.count(runner_id)) runner_id++;
-    globalRunnerInfos[runner_id] = std::make_shared<RunnerInfo>(bmodel, batch);
+    globalRunnerInfos[runner_id] = std::make_shared<RunnerInfo>(bmodel);
     return runner_id;
-}
-
-unsigned int runner_start(const char *bmodel) {
-    runner_start_with_batch(bmodel, 1);
 }
 
 void runner_stop(unsigned int runner_id) {
@@ -190,7 +179,7 @@ static tensor_data_t *__runner_get_output(unsigned runner_id, unsigned int *task
     *task_id = output.id;
     *output_num = output.num;
     *is_valid = status->valid;
-    info->status.update(status, info->batch);
+    info->status.update(status);
     return output.tensors;
 }
 
@@ -217,45 +206,3 @@ int runner_empty(unsigned int runner_id)
     if(!globalRunnerInfos.count(runner_id)) return true;
     return globalRunnerInfos[runner_id]->runner.empty();
 }
-
-void runner_use_devices(const unsigned *device_ids, unsigned num)
-{
-    globalDevices.assign(device_ids, device_ids+num);
-}
-
-unsigned int available_devices(unsigned int *devices, unsigned int maxNum)
-{
-    auto deviceIds = getAvailableDevices();
-    unsigned int realNum = maxNum>deviceIds.size()?deviceIds.size(): maxNum;
-    for(size_t i =0; i<realNum; i++){
-        devices[i] = deviceIds[i];
-    }
-    return realNum;
-}
-
-blob_info_t *get_input_info(unsigned runner_id, unsigned *num)
-{
-    if(!globalRunnerInfos.count(runner_id)) {
-        BMLOG(ERROR, "invalid runner_id %d", runner_id);
-        return nullptr;
-    }
-    auto& info = globalRunnerInfos[runner_id];
-    const bm_net_info_t *net_info = info->runner.getNetInfo();
-    *num = net_info->input_num;
-    auto blobs = new blob_info_t[*num];
-    for (int i = 0; i < *num; ++i)
-    {
-        auto &blob = blobs[i];
-        blob.name = net_info->input_names[i];
-        bm_shape_t &s = net_info->stages[0].input_shapes[i];
-        blob.num_dims = s.num_dims;
-        memcpy(blob.dims, s.dims, s.num_dims * sizeof(int));
-    }
-    return blobs;
-}
-
-void release_input_info(unsigned runner_id, blob_info_t *info)
-{
-    delete[] info;
-}
-

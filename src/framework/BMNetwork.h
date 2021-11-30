@@ -26,12 +26,6 @@ public:
     const bm_shape_t* get_shape() const { return &m_tensor->shape; }
     bm_data_type_t get_dtype() const { return m_tensor->dtype; }
     size_t get_dtype_len() const;
-    void set_shape(const unsigned int* shape, size_t dims){
-        m_tensor->shape.num_dims = dims;
-        for(size_t i=0; i<dims; i++){
-            m_tensor->shape.dims[i] = shape[i];
-        }
-    }
     size_t shape(int dim) const {
         while(dim<0) dim+=m_tensor->shape.num_dims;
         return dim<m_tensor->shape.num_dims? m_tensor->shape.dims[dim]:1; }
@@ -46,7 +40,6 @@ public:
     unsigned char* get_raw_data();
     float *get_float_data();
     size_t fill_host_mem(void* ptr, size_t len);
-    const std::string &name() const { return m_name; }
 
     virtual ~BMTensor();
     void dumpData(const char* name);
@@ -79,7 +72,6 @@ public:
 
     ~BMNetwork() { }
     size_t getBatchSize(){ return batchSize; }
-    const bm_net_info_t *getNetInfo() const { return m_netinfo; }
 
     TensorVec createOutputTensors();
     TensorVec createInputTensors();

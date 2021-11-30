@@ -24,18 +24,20 @@ struct YOLOv5Config {
     size_t netBatch;
     size_t netHeight;
     size_t netWidth;
-    char type = 's'; // s, m, l, x
     bm_image_format_ext netFormat;
     bm_image_data_format_ext netDtype;
     bmcv_convert_to_attr ConvertAttr;
+    bmcv_convert_to_attr ConvertAttr2;
+
     // use static to cache resizedImage, to avoid allocating memory everytime
     std::vector<bm_image> resizedImages;
+    std::vector<bm_image> tempImg;
     // bmcv_image_convert_to do not support RGB_PACKED format directly
     // use grayImages as a RGB_PACKED wrapper
     std::vector<bm_image> grayImages;
     // used as a wrapper of input tensor
     std::vector<bm_image> preOutImages;
-    std::string savePath = "yolov5_outputs";
+    std::string savePath = "yolov5_out";
     std::vector<std::vector<std::vector<int>>> m_anchors{{{10, 13}, {16, 30}, {33, 23}},
                                                         {{30, 61}, {62, 45}, {59, 119}},
                                                         {{116, 90}, {156, 198}, {373, 326}}};
@@ -55,13 +57,13 @@ struct YOLOv5Config {
         netFormat = FORMAT_RGB_PLANAR; // for NHWC input
         float input_scale = 1.0;
         if(inTensor->get_dtype() == BM_FLOAT32){
-            netDtype = DATA_TYPE_EXT_FLOAT32;
-            probThreshold = 0.3;
+            netDtype = DATA_TYPE_EXT_FLOAT32; 
+            probThreshold = 0.5;
             iouThreshold = 0.5;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
-            probThreshold = 0.2;
-            iouThreshold = 0.45;
+            probThreshold = 0.001;
+            iouThreshold = 0.5;
             input_scale = inTensor->get_scale();
         }
         if(!isNCHW){
@@ -81,10 +83,8 @@ struct YOLOv5Config {
         ConvertAttr.alpha_2 = real_scale;
         ConvertAttr.beta_2 = real_bias;
 
-        resizedImages = ctx->allocAlignedImages(
-                    netBatch, netHeight, netWidth, netFormat, DATA_TYPE_EXT_1N_BYTE);
+        resizedImages = ctx->allocAlignedImages(netBatch, netHeight, netWidth, FORMAT_RGB_PLANAR, DATA_TYPE_EXT_1N_BYTE);
         if(!isNCHW){
-
             grayImages = ctx->allocImagesWithoutMem(
                         netBatch, netHeight, netWidth*3, FORMAT_GRAY, DATA_TYPE_EXT_1N_BYTE, 64);
             bm_device_mem_t resizedMem;
@@ -117,15 +117,26 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     thread_local static YOLOv5Config cfg;
     cfg.initialize(inTensor, ctx);
 
-    auto alignedInputs = new std::vector<bm_image>;
+    std::vector<bm_image> * alignedInputs = new std::vector<bm_image>;
     for(auto imageName: in){
         auto image = readAlignedImage(ctx->handle, imageName);
         alignedInputs->push_back(image);
-    }
+    }        
     bmcv_color_t color = {114, 114, 114};
 
     aspectScaleAndPad(ctx->handle, *alignedInputs, cfg.resizedImages, color);
-//    saveImage(cfg.resizedImages[0], "resize.jpg");
+
+        // int* size = new int;
+
+        // bm_image_get_byte_size(cfg.resizedImages[0], size);
+        // auto buf1 = new void*[1];
+        // buf1[0] = new unsigned char[*size];
+        // bm_image_copy_device_to_host(cfg.resizedImages[0], buf1);
+        // delete [] size;
+        // delete [] buf1;
+
+
+    saveImage(cfg.resizedImages[0], "resize.jpg");
 
     auto mem = inTensor->get_device_mem();
     bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
@@ -154,7 +165,8 @@ bool yoloV5BoxParse(DetectBox& box,
                         size_t len, 
                         float probThresh, 
                         CoordConvertInfo& ci,  
-                        size_t grid_x, size_t grid_y, 
+                        size_t grid_x,
+                        size_t grid_y, 
                         size_t tensor_idx,
                         size_t anchor_idx,
                         size_t grid_w,
@@ -164,8 +176,8 @@ bool yoloV5BoxParse(DetectBox& box,
     auto scores = &data[5];
     int category;
     category = argmax(scores, classNum);
-    box.confidence = sigmoid(data[4]) * sigmoid(scores[category]);
-    if(box.confidence <= probThresh){
+    box.confidence = sigmoid(data[4])* sigmoid(scores[category]);
+    if((box.confidence <= probThresh) ){
         return false;
     }
 
@@ -173,18 +185,16 @@ bool yoloV5BoxParse(DetectBox& box,
     float centerY = (sigmoid(data[1]) * 2 - 0.5 + grid_y) * cfg.netHeight / grid_h; //center_y
     float width   = pow((sigmoid(data[2]) * 2), 2) * cfg.m_anchors[tensor_idx][anchor_idx][0]; //in w
     float height  = pow((sigmoid(data[3]) * 2), 2) * cfg.m_anchors[tensor_idx][anchor_idx][1]; //in h
-    box.xmin  = int(centerX - width  / 2);
-    box.ymin  = int(centerY - height / 2);
-    box.xmax  = int(centerX + width / 2);
-    box.ymax  = int(centerY + height / 2);
+    box.xmin  = centerX - width  / 2;
+    box.ymin  = centerY - height / 2;
+    box.xmax  = centerX + width / 2;
+    box.ymax  = centerY + height / 2;
 
-    box.xmin = (box.xmin - ci.wOffset)*ci.ioRatio;
-    box.xmax = (box.xmax - ci.wOffset)*ci.ioRatio;
-    box.ymin = (box.ymin - ci.hOffset)*ci.ioRatio;
-    box.ymax = (box.ymax - ci.hOffset)*ci.ioRatio;
+    // box.xmin = (box.xmin - ci.wOffset)*ci.ioRatio;
+    // box.xmax = (box.xmax - ci.wOffset)*ci.ioRatio;
+    // box.ymin = (box.ymin - ci.hOffset)*ci.ioRatio;
+    // box.ymax = (box.ymax - ci.hOffset)*ci.ioRatio;
 
-
-    // filter some invalid boxes by confidence
     if(box.xmin > box.xmax || box.ymin > box.ymax){
         return false;
     }
@@ -274,7 +284,6 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
                                         cfg)){
                             batchIndice[b]++;
                         }
-
                     }
                 }
             }
@@ -291,8 +300,13 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     for(size_t b=0; b<batch; b++){
         auto name = baseName(rawIn[b]);
         auto imageId = globalImageIdMap[name];
+        auto& ci = coordInfos[b];
         for(auto& r: postOut.results[b]) {
-            r.imageId=imageId;
+            r.imageId = imageId;
+            r.xmin = (r.xmin - ci.wOffset)*ci.ioRatio;
+            r.xmax = (r.xmax - ci.wOffset)*ci.ioRatio;
+            r.ymin = (r.ymin - ci.hOffset)*ci.ioRatio;
+            r.ymax = (r.ymax - ci.hOffset)*ci.ioRatio;
         }
     }
 
@@ -320,7 +334,7 @@ bool resultProcess(const PostOutType& out, std::vector<DetectBox>& allPrediction
             if(box.categoryName != ""){
                 label += "-" + box.categoryName;
             }
-            label+= ":" + std::to_string(box.confidence);
+            label += ":" + std::to_string(box.confidence);
             BMLOG(INFO, "  box [%d, %d, %d, %d], %s",
                   (size_t)box.xmin, (size_t)box.ymin, (size_t)box.xmax, (size_t)box.ymax, label.c_str());
         }
@@ -333,14 +347,11 @@ int main(int argc, char* argv[]){
     set_env_log_level(INFO);
     std::string topDir = "../";
     // std::string dataPath = topDir + "data/coco/images";
-    std::string dataPath = "/workspace/my/dataset/coco/images/val2017-bu";
-    std::string bmodel = topDir + "models/yolov5s/yolov5s_1b_fp32.bmodel";
+    std::string dataPath = "/workspace/my/dataset/coco/images/oneImg";
+    std::string bmodel = topDir + "models/yolov5x/yolov5x_1b_int8.bmodel";
     std::string refFile = topDir+ "data/coco/instances_val2017.json";
     std::string labelFile = topDir + "data/coco/coco_val2017.names";
     if(argc>1) dataPath = argv[1];
-    if(argc>2) bmodel = argv[2];
-    if(argc>3) refFile = argv[3];
-    if(argc>4) labelFile = argv[4];
     std::vector<DetectBox> allPredictions;
     globalGroundTruth =  readCocoDatasetBBox(refFile);
 

@@ -12,10 +12,14 @@
 #include "bmcv_api.h"
 
 using namespace bm;
-#define OUTPUT_RESULT_FILE  "yolov3_result.json"
+#define OUTPUT_DIR "yolov3_out"
+#define OUTPUT_IMAGE_DIR  OUTPUT_DIR "/images"
+#define OUTPUT_PREDICTION_DIR  OUTPUT_DIR "/prediction"
+#define OUTPUT_GROUND_TRUTH_DIR OUTPUT_DIR "/groundtruth"
 std::map<size_t, std::string> globalLabelMap;
-std::map<size_t, size_t> categoryInCoco;
-std::map<std::string, size_t> globalImageIdMap;
+std::map<std::string, std::vector<DetectBox>> globalGroundTruth;
+std::set<std::string> globalLabelSet;
+
 
 struct YOLOv3Config {
     bool initialized = false;
@@ -38,6 +42,7 @@ struct YOLOv3Config {
     float probThreshold;
     float iouThreshold;
     const size_t classNum = 80;
+    std::string savePath = OUTPUT_IMAGE_DIR;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
         if(initialized) return;
@@ -93,6 +98,7 @@ struct YOLOv3Config {
     }
 };
 
+
 using InType = std::vector<std::string>;
 
 struct PostOutType {
@@ -146,8 +152,8 @@ struct CoordConvertInfo {
 bool yoloV3BoxParse(DetectBox& box, float* data, size_t len, float probThresh, CoordConvertInfo& ci){
     size_t classNum = len - 5;
     auto scores = &data[5];
-    auto category = argmax(scores, classNum);
-    box.confidence = data[4] * scores[category];
+    box.category = argmax(scores, classNum);
+    box.confidence = data[4] * scores[box.category];
     if(box.confidence <= probThresh){
         return false;
     }
@@ -164,11 +170,13 @@ bool yoloV3BoxParse(DetectBox& box, float* data, size_t len, float probThresh, C
     box.ymax = (box.ymax - ci.hOffset)* ci.ioRatio;
 
     // filter some invalid boxes by confidence
-    if(!box.isValid(ci.inputWidth, ci.inputHeight)){
+    if(box.xmin >= box.xmax ||
+            box.ymin >= box.ymax ||
+            box.xmin<0 || box.xmax >= ci.inputWidth ||
+            box.ymin<0 || box.ymax >= ci.inputHeight) {
         return false;
     }
-    box.category = categoryInCoco[category];
-    box.categoryName = globalLabelMap[category];
+    box.categoryName = globalLabelMap[box.category];
     return true;
 }
 
@@ -237,18 +245,12 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     // final results
     postOut.results = batchNMS(batchBoxInfos, cfg.iouThreshold);
 
+    // draw rectangle
     for(size_t b=0; b<batch; b++){
         auto name = baseName(rawIn[b]);
-        auto imageId = globalImageIdMap[name];
-        for(auto& r: postOut.results[b]) {
-            r.imageId=imageId;
-        }
+        drawDetectBoxEx(pInputImages->at(b), postOut.results[b], globalGroundTruth[name], cfg.savePath+"/"+name);
     }
 
-//    for(size_t b=0; b<batch; b++){
-//        auto name = baseName(rawIn[b]);
-//        drawDetectBoxEx(pInputImages->at(b), batchResult[b], globalGroundTruth[name], cfg.savePath+"/"+name);
-//    }
     // clear extra data
     for(size_t i=0; i<pInputImages->size(); i++) {
         bm_image_destroy(pInputImages->at(i));
@@ -257,22 +259,34 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     return true;
 }
 
-bool resultProcess(const PostOutType& out, std::vector<DetectBox>& allPredictions){
+bool resultProcess(const PostOutType& out){
     if(out.rawIns.empty()) return false;
-    auto batch = out.rawIns.size();
-    for(auto b=0; b<batch; b++){
-        auto name = baseName(out.rawIns[b]);
-        BMLOG(INFO, "'%s' result", name.c_str());
-        for(auto& box: out.results[b]){
-            auto label = std::to_string(box.category);
-            if(box.categoryName != ""){
-                label += "-" + box.categoryName;
-            }
-            label+= ":" + std::to_string(box.confidence);
-            BMLOG(INFO, "  box [%d, %d, %d, %d], %s",
-                  (size_t)box.xmin, (size_t)box.ymin, (size_t)box.xmax, (size_t)box.ymax, label.c_str());
+    auto imageNum = out.rawIns.size();
+    for(size_t i=0; i<imageNum; i++){
+        auto name = baseName(out.rawIns[i]);
+        if(!globalGroundTruth.count(name)) {
+            BMLOG(WARNING, "cannot find %s in ground true info", name.c_str());
+            continue;
         }
-        allPredictions.insert(allPredictions.end(), out.results[b].begin(), out.results[b].end());
+        std::string predName = OUTPUT_PREDICTION_DIR "/";
+        predName += name+ ".txt";
+        std::ofstream os(predName);
+        auto& boxes = out.results[i];
+        for(auto& box: boxes){
+            os<<box<<std::endl;
+        }
+
+        std::string gtName = OUTPUT_GROUND_TRUTH_DIR "/";
+        gtName += name + ".txt";
+        std::ofstream gtOs(gtName);
+        auto& gtBoxes = globalGroundTruth.at(name);
+        for(auto& box: gtBoxes){
+            if(!globalLabelSet.count(box.categoryName)) {
+                BMLOG(WARNING, "current prediction does not cover category %s", box.categoryName.c_str());
+                continue;
+            }
+            gtOs<<box<<std::endl;
+        }
     }
     return true;
 }
@@ -287,21 +301,19 @@ int main(int argc, char* argv[]){
     if(argc>2) bmodel = argv[2];
     if(argc>3) refFile = argv[3];
     if(argc>4) labelFile = argv[4];
-    std::vector<DetectBox> allPredictions;
 
+    mkdir(OUTPUT_DIR, 0777);
+    mkdir(OUTPUT_IMAGE_DIR, 0777);
+    mkdir(OUTPUT_PREDICTION_DIR, 0777);
+    mkdir(OUTPUT_GROUND_TRUTH_DIR, 0777);
     globalLabelMap = loadLabels(labelFile);
-    std::map<std::string, size_t> categoryToId;
-    readCocoDatasetInfo(refFile, globalImageIdMap, categoryToId);
-    for(auto& idLabel: globalLabelMap){
-        categoryInCoco[idLabel.first] = categoryToId[idLabel.second];
-        BMLOG(INFO, "%d->%d: %s", idLabel.first, categoryToId[idLabel.second], idLabel.second.c_str());
-    }
+    for(auto &p: globalLabelMap) globalLabelSet.insert(p.second);
+    globalGroundTruth =  readCocoDatasetBBox(refFile);
 
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
     size_t batchSize= runner.getBatchSize();
     ProcessStatInfo info(bmodel);
-    info.start();
     std::thread dataThread([dataPath, batchSize, &runner](){
         forEachBatch(dataPath, batchSize, [&runner](const std::vector<std::string> names){
             return runner.push(names);
@@ -314,7 +326,7 @@ int main(int argc, char* argv[]){
             }
         }
     });
-    std::thread resultThread([&runner, &info, &allPredictions](){
+    std::thread resultThread([&runner, &info](){
         PostOutType out;
         std::shared_ptr<ProcessStatus> status;
         bool stopped = false;
@@ -328,7 +340,7 @@ int main(int argc, char* argv[]){
             }
             if(stopped) break;
             info.update(status, out.rawIns.size());
-            if(!resultProcess(out, allPredictions)){
+            if(!resultProcess(out)){
                 runner.stop(status->deviceId);
             }
             if(runner.allStopped()){
@@ -338,10 +350,8 @@ int main(int argc, char* argv[]){
         }
     });
 
-
     dataThread.join();
     resultThread.join();
-    saveCocoResults(allPredictions, OUTPUT_RESULT_FILE);
     return 0;
 }
 

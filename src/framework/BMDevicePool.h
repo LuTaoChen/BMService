@@ -193,11 +193,6 @@ public:
         pool->addNode(postFunc);
     }
 
-    const bm_net_info_t *getNetInfo() const {
-        const ContextType &ctx = pool->getPipeLineContext(0);
-        return ctx.net->getNetInfo();
-    }
-
     void start() {
         pool->start();
     }
