@@ -7,6 +7,9 @@
 //#define FFALIGN(x, n) ((((x)+((n)-1))/(n))*(n))
 
 namespace bm {
+
+float softmax(float * data, int len);
+
 std::vector<int> calcImageStride(
         int height, int width,
         bm_image_format_ext format,

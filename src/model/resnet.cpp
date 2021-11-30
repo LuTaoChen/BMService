@@ -178,7 +178,7 @@ bool resultProcess(const PostOutType& out, Top5AccuracyStat& stat,
     BM_ASSERT_EQ(out.rawIns.size(), out.classAndScores.size());
     for(size_t i=0; i<out.rawIns.size(); i++){
         auto& inName = out.rawIns[i];
-        auto realClass = refMap[out.rawIns[i]];
+        auto realClass = refMap[baseName(out.rawIns[i])];
         auto& classAndScores = out.classAndScores[i];
         auto firstClass = classAndScores[0].first;
         auto firstScore = classAndScores[0].second;
@@ -203,7 +203,7 @@ int main(int argc, char* argv[]){
     std::string topDir = "../";
     std::string dataPath = topDir + "data/ILSVRC2012/images";
     // std::string bmodel = topDir + "models/resnet50_v1/fix8b.bmodel";
-    std::string bmodel = topDir + "models/resnet101/compilation_4n.bmodel";
+    std::string bmodel = topDir + "models/resnet101/fp32.bmodel";
     // std::string bmodel = topDir + "models/resnet50_v1/compilation_4n.bmodel";
     std::string refFile = topDir + "data/ILSVRC2012/val.txt";
     std::string labelFile = topDir + "data/ILSVRC2012/labels.txt";
@@ -214,11 +214,7 @@ int main(int argc, char* argv[]){
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
     size_t batchSize= runner.getBatchSize();
-    std::string prefix = dataPath;
-    if(prefix[prefix.size()-1] != '/'){
-        prefix += "/";
-    }
-    auto refMap = loadClassRefs(refFile, prefix);
+    auto refMap = loadClassRefs(refFile, "");
     auto labelMap = loadLabels(labelFile);
     ProcessStatInfo info("resnet50");
     Top5AccuracyStat topStat;

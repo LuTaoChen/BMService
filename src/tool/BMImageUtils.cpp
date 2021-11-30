@@ -13,6 +13,19 @@
 #include "bm_wrapper.hpp"
 
 namespace bm {
+
+float softmax(float * data, int len){
+    float sum = 0;
+    for (int i=0;i<len;i++){
+        data[i] = exp(data[i]);
+        sum += data[i];
+    }
+    for (int i=0;i<len;i++){
+        data[i] /= sum;
+    }
+
+}
+
 std::vector<int> calcImageStride(int height, int width,
                                  bm_image_format_ext format,
                                  bm_image_data_format_ext dtype,

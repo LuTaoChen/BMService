@@ -5,9 +5,10 @@
 #include "BMDeviceUtils.h"
 #include "BMImageUtils.h"
 #include "bmcv_api.h"
+#include <regex>
 
 using namespace bm;
-using InType = std::vector<std::string>;
+using InType = std::vector<std::string>;    
 using ClassId = size_t;
 
 struct PostOutType {
@@ -15,7 +16,7 @@ struct PostOutType {
     std::vector<std::vector<std::pair<ClassId, float>>> classAndScores;
 };
 
-struct VGG16Config {
+struct ResNetConfig {
     bool initialized = false;
     bool isNCHW;
     size_t netBatch;
@@ -25,22 +26,14 @@ struct VGG16Config {
     bm_image_data_format_ext netDtype;
     bmcv_convert_to_attr ConvertAttr;
     // use static to cache resizedImage, to avoid allocating memory everytime
-    std::vector<bm_image> resizedImages;
-    // bmcv_image_convert_to do not support RGB_PACKED format directly
-    // use grayImages as a RGB_PACKED wrapper
-    // used as a wrapper of input tensor
-    std::vector<bm_image> preOutImages;
     std::vector<bm_image> cropedImages;
-
+    std::vector<bm_image> preOutImages;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
         if(initialized) return;
         initialized = true;
         netBatch = inTensor->shape(0);
         isNCHW = inTensor->shape(1) == 3;
-        netHeight = inTensor->shape(2);
-        netWidth = inTensor->shape(3);
-        netFormat = FORMAT_RGB_PLANAR; // for NHWC input
         if(inTensor->get_dtype() == BM_FLOAT32){
             netDtype = DATA_TYPE_EXT_FLOAT32;
         } else {
@@ -51,6 +44,11 @@ struct VGG16Config {
             netWidth = inTensor->shape(2);
             netFormat = FORMAT_RGB_PACKED;
             BM_ASSERT_EQ(inTensor->shape(3), 3);
+        }else{
+            netHeight = inTensor->shape(2);
+            netWidth = inTensor->shape(3);
+            netFormat = FORMAT_RGB_PLANAR; // for NHWC input
+
         }
         float input_scale = inTensor->get_scale();
         float scale = 1.0;
@@ -60,12 +58,9 @@ struct VGG16Config {
         ConvertAttr.alpha_0 = real_scale;
         ConvertAttr.beta_0 = real_bias - 123.68;
         ConvertAttr.alpha_1 = real_scale;
-        ConvertAttr.beta_1 = real_bias - 116.779;
+        ConvertAttr.beta_1 = real_bias - 116.78;
         ConvertAttr.alpha_2 = real_scale;
-        ConvertAttr.beta_2 = real_bias - 103.939;
-
-        resizedImages = ctx->allocAlignedImages(
-                    netBatch, netHeight, netWidth, netFormat, DATA_TYPE_EXT_1N_BYTE);
+        ConvertAttr.beta_2 = real_bias - 103.94;
 
         // new bm_image;
         cropedImages = ctx->allocAlignedImages(
@@ -74,12 +69,11 @@ struct VGG16Config {
         preOutImages = ctx->allocImagesWithoutMem(netBatch, netHeight, netWidth, netFormat, netDtype);
     }
 };
-
+/*
+    @param: inTensor: input of model, vector of TensorPtr
+*/
 bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
-    /*
-    @param: inTensor: input of model
-    */
-    thread_local static VGG16Config cfg;
+    thread_local static ResNetConfig cfg;
     if(in.empty()) return false;
     BM_ASSERT_EQ(inTensors.size(), 1);
     auto inTensor = inTensors[0];
@@ -91,18 +85,28 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     // after aspect preserve
     std::vector<bm_image> aspectResized;
 
+    // std::regex r("ILSVRC2012_val_\\d+\\.JPEG");
+    // std::smatch match; 
+    // bool found = regex_search(in[0], match, r);
+
+// TimeRecorder r;
+// r.record("read");
     for(auto imageName: in){
         auto image = readAlignedImage(ctx->handle, imageName);
         alignedInputs.push_back(image);
     }
+// r.record("resize and crop");
 
+    // Original operations are aspect preserve resize then central crop 
+    // But equivalent to cenrtal crop then resize to a square
     centralCrop(ctx->handle, alignedInputs, cfg.cropedImages); 
-    
+
+// r.record("attach memery");  
     auto mem = inTensor->get_device_mem();
     bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
-
+// r.record("linear convert"); 
     if(cfg.isNCHW){
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, cfg.resizedImages.data(), cfg.preOutImages.data());
+        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, cfg.cropedImages.data(), cfg.preOutImages.data());
     } else {
         //to planar
         std::vector<bm_image> planarImage1, planarImage2;
@@ -110,19 +114,35 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
                             cfg.netBatch, cfg.netHeight, cfg.netWidth, FORMAT_RGB_PLANAR, DATA_TYPE_EXT_FLOAT32, 1);
         planarImage2 = ctx->allocImagesWithoutMem(
                             cfg.netBatch, cfg.netHeight, cfg.netWidth, FORMAT_RGB_PLANAR, DATA_TYPE_EXT_FLOAT32, 1);
-        bmcv_image_storage_convert(ctx->handle, 1, cfg.resizedImages.data(), planarImage1.data());      
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, planarImage1.data(), planarImage2.data());
+        bmcv_image_storage_convert(ctx->handle, 1, cfg.cropedImages.data(), planarImage1.data());      
+        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, planarImage1.data(), planarImage2.data());   
         bmcv_image_storage_convert(ctx->handle, 1, planarImage2.data(), cfg.preOutImages.data());
-    }
 
-    // destroy temporary bm_image
+            // int* size = new int;
+
+            // bm_image_get_byte_size(cfg.preOutImages[0], size);
+            // auto buf2 = new void*[1];
+            // buf2[0] = new unsigned char[*size];
+            // bm_image_copy_device_to_host(cfg.preOutImages[0], buf2);
+            // delete [] buf2;
+
+        for(auto &p: planarImage1) {
+            bm_image_destroy(p);
+        }
+         for(auto &p: planarImage2) {
+            bm_image_destroy(p);
+        }
+
+    }
+// r.record("destroy");    
+    //destroy temporary bm_image
     for(auto &image: alignedInputs) {
         bm_image_destroy(image);
     }
-
     for(auto &ap: aspectResized) {
         bm_image_destroy(ap);
     }
+// r.show();
     return true;
 }
 
@@ -133,7 +153,7 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     float* data = outTensor->get_float_data();
     size_t batch = outTensor->shape(0);
     size_t len = outTensor->shape(1);
-
+    softmax(data, len);
     postOut.classAndScores.resize(batch);
     for(size_t b=0; b<batch; b++){
         float* allScores = data+b*len;
@@ -158,13 +178,12 @@ bool resultProcess(const PostOutType& out, Top5AccuracyStat& stat,
     BM_ASSERT_EQ(out.rawIns.size(), out.classAndScores.size());
     for(size_t i=0; i<out.rawIns.size(); i++){
         auto& inName = out.rawIns[i];
-        auto realClass = refMap[out.rawIns[i]];
+        auto realClass = refMap[baseName(out.rawIns[i])];
         auto& classAndScores = out.classAndScores[i];
         auto firstClass = classAndScores[0].first;
         auto firstScore = classAndScores[0].second;
         stat.samples++;
         stat.top1 += firstClass == realClass;
-        BM_ASSERT_NE(firstClass, 1000);
         for(auto& cs: classAndScores){
             if(cs.first == realClass){
                 stat.top5++;
@@ -186,7 +205,7 @@ int main(int argc, char* argv[]){
     // std::string bmodel = topDir + "models/vgg16/fix8b.bmodel";
     std::string bmodel = topDir + "models/vgg16/fp32.bmodel";
     // std::string bmodel = topDir + "models/vgg16/compilation_4n.bmodel";
-    std::string refFile = topDir+ "data/ILSVRC2012/val.txt";
+    std::string refFile = topDir + "data/ILSVRC2012/val.txt";
     std::string labelFile = topDir + "data/ILSVRC2012/labels.txt";
     if(argc>1) dataPath = argv[1];
     if(argc>2) bmodel = argv[2];
@@ -195,11 +214,7 @@ int main(int argc, char* argv[]){
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
     size_t batchSize= runner.getBatchSize();
-    std::string prefix = dataPath;
-    if(prefix[prefix.size()-1] != '/'){
-        prefix += "/";
-    }
-    auto refMap = loadClassRefs(refFile, prefix);
+    auto refMap = loadClassRefs(refFile, "");
     auto labelMap = loadLabels(labelFile);
     ProcessStatInfo info("vgg16");
     Top5AccuracyStat topStat;
@@ -216,7 +231,7 @@ int main(int argc, char* argv[]){
             }
         }
     });
-    std::thread resultThread([&runner, &refMap, &labelMap, &info](){
+    std::thread resultThread([&runner, &refMap, &labelMap, &info, batchSize](){
         PostOutType out;
         std::shared_ptr<ProcessStatus> status;
         bool stopped = false;
@@ -230,7 +245,7 @@ int main(int argc, char* argv[]){
                 std::this_thread::yield();
             }
             if(stopped) break;
-            info.update(status, out.rawIns.size());
+            info.update(status, batchSize);
 
             if(!resultProcess(out, stat, refMap, labelMap)){
                 runner.stop(status->deviceId);
