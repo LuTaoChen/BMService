@@ -192,7 +192,7 @@ make -j
 BMSerice-xxx will be generated for running
 
 
-## BMService的python环境准备
+## BMService的python环境准备和bert运行
 
 下载最新的BMService代码
 
@@ -205,14 +205,14 @@ cp build/libbmservice.so python/bmservice/lib
 export PYTHONPATH=`pwd`/python
 ```
 
-将BMservice/examples/bmservice_squad.py复制到finetune的bert目录下, 修改里面的脚本参数：bmodel_path和input_file
+将BMservice/examples/bert/bmservice_squad.py复制到finetune的bert目录下, 修改里面的脚本参数：bmodel_path和input_file
 在bert目录下
 
 ```shell
 python3 bmservice_squad.py
 ```
 
-计算精度
+bert计算精度
 
 ```shell
 python3 squad/evaluate-v1.1.py --dataset_file squad/dev-v1.1.json --prediction_file squad_eval_out/prediction.json
