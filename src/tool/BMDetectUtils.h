@@ -35,7 +35,7 @@ void drawDetectBox(bm_image& bmImage, const std::vector<DetectBox>& boxes, const
 
 void drawDetectBoxEx(bm_image& bmImage, const std::vector<DetectBox>& boxes, const std::vector<DetectBox>& trueBoxes, const std::string& saveName="");
 std::vector<DetectBox> singleNMS(const std::vector<DetectBox>& info,
-                                 float iouThresh, size_t topk = 0, bool useSoftNms=false, float sigma=0.3);
+                                 float iouThresh, size_t topk = 0, bool useSoftNms=false, float sigma=0.3, bool agnosticNMS=false);
 std::vector<DetectBox> singleNMS_agnostic(const std::vector<DetectBox>& info,
                                  float iouThresh, size_t topk = 0, bool useSoftNms=false, float sigma=0.3);
 

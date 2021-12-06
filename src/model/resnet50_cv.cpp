@@ -359,7 +359,7 @@ int main(int argc, char* argv[]){
 /*
     2021-09-23
     BGR to RGB and 
-    packed to plannar
+    nhwc to nchw
     convert to fp32/int16
     multiplied by input scale of quantization
     subtracted by mean rgb value btw
