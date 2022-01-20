@@ -7,6 +7,7 @@
 #include "bmcv_api.h"
 #include <regex>
 
+
 using namespace bm;
 using InType = std::vector<std::string>;    
 using ClassId = size_t;
@@ -25,20 +26,30 @@ struct ResNetConfig {
     bm_image_format_ext netFormat;
     bm_image_data_format_ext netDtype;
     bmcv_convert_to_attr ConvertAttr;
-    // use static to cache resizedImage, to avoid allocating memory everytime
-    std::vector<bm_image> cropedImages;
+
+    // used as a wrapper of input tensor
     std::vector<bm_image> preOutImages;
+    cv::Mat BGRMean;
+    int devId;
+    cv::SophonDevice sophonDev;
+    float input_scale;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
-        if(initialized) return;
+        if(initialized) 
+            return;
         initialized = true;
+        devId = cv::bmcv::getId(ctx->handle);
+        sophonDev = cv::SophonDevice(devId);
+        input_scale = inTensor->get_scale();
         netBatch = inTensor->shape(0);
         isNCHW = inTensor->shape(1) == 3;
+
         if(inTensor->get_dtype() == BM_FLOAT32){
             netDtype = DATA_TYPE_EXT_FLOAT32;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
         }
+
         if(!isNCHW){
             netHeight = inTensor->shape(1);
             netWidth = inTensor->shape(2);
@@ -47,9 +58,11 @@ struct ResNetConfig {
         }else{
             netHeight = inTensor->shape(2);
             netWidth = inTensor->shape(3);
-            netFormat = FORMAT_RGB_PLANAR; // for NHWC input
-
+            netFormat = FORMAT_RGB_PLANAR; 
         }
+
+        BGRMean = cv::Mat(netWidth, netHeight, CV_32FC3, cv::Scalar(103.94, 116.78, 123.68), sophonDev);
+
         float input_scale = inTensor->get_scale();
         float scale = 1.0;
         float bias = 0;
@@ -62,82 +75,65 @@ struct ResNetConfig {
         ConvertAttr.alpha_2 = real_scale;
         ConvertAttr.beta_2 = real_bias - 103.94;
 
-        // new bm_image;
-        cropedImages = ctx->allocAlignedImages(
-                    netBatch, netHeight, netWidth, netFormat, DATA_TYPE_EXT_1N_BYTE);
-        
+        netDtype = inTensor->get_dtype() == BM_FLOAT32 ? DATA_TYPE_EXT_FLOAT32 : DATA_TYPE_EXT_1N_BYTE_SIGNED;
+        if(!isNCHW){
+            netHeight = inTensor->shape(1);
+            netWidth = inTensor->shape(2);
+            netFormat = FORMAT_RGB_PACKED; 
+            BM_ASSERT_EQ(inTensor->shape(3), 3);
+        }
         preOutImages = ctx->allocImagesWithoutMem(netBatch, netHeight, netWidth, netFormat, netDtype);
     }
 };
-/*
-    @param: inTensor: input of model, vector of TensorPtr
-*/
+
 bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     thread_local static ResNetConfig cfg;
+
+    std::vector<cv::Mat> cropedImages;
+    std::vector<cv::Mat> cvImages;
+    std::vector<cv::Mat> resizeds;
+
     if(in.empty()) return false;
     BM_ASSERT_EQ(inTensors.size(), 1);
     auto inTensor = inTensors[0];
     BM_ASSERT_EQ(inTensor->dims(), 4);
-
     cfg.initialize(inTensor, ctx);
-
-    std::vector<bm_image> alignedInputs;
-
-    // std::regex r("ILSVRC2012_val_\\d+\\.JPEG");
-    // std::smatch match; 
-    // bool found = regex_search(in[0], match, r);
-
-// TimeRecorder r;
-// r.record("read");
-    for(auto imageName: in){
-        auto image = readAlignedImage(ctx->handle, imageName);
-        alignedInputs.push_back(image);
-    }
-// r.record("resize and crop");
-
-    // Original operations are aspect preserve resize then central crop 
-    // But equivalent to cenrtal crop then resize to a square
-    centralCrop(ctx->handle, alignedInputs, cfg.cropedImages); 
-
-// r.record("attach memery");  
-    auto mem = inTensor->get_device_mem();
+    const bm_device_mem_t * mem = inTensor->get_device_mem();
+    void * pInput;
     bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
-// r.record("linear convert"); 
+
+    // read image
+    for(auto imageName: in){
+        auto u8Mat = cv::imread(imageName, cv::ImreadModes::IMREAD_COLOR, cfg.devId); 
+        cv::Mat fpMat;
+        u8Mat.convertTo(fpMat, CV_32FC3);
+        cvImages.push_back(fpMat);
+    }
+
+    centralCrop(cvImages, cropedImages);
+    for (int i = 0; i < cropedImages.size(); i++){
+        cv::Mat resized(cv::Size(cfg.netWidth, cfg.netHeight), CV_32FC3, cfg.sophonDev);;
+        cv::resize(cropedImages[i], resized, cv::Size(cfg.netWidth, cfg.netHeight), cv::INTER_LINEAR);
+        resized -= cfg.BGRMean;
+        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
+        if (inTensor->get_dtype() == BM_INT8){
+            resized.convertTo(resized, CV_8SC3, cfg.input_scale);
+        }
+        resizeds.push_back(resized);
+
+    }
     if(cfg.isNCHW){
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, cfg.cropedImages.data(), cfg.preOutImages.data());
-    } else {
-        //to planar
-        std::vector<bm_image> planarImage1, planarImage2;
-        planarImage1 = ctx->allocImagesWithoutMem(
-                            cfg.netBatch, cfg.netHeight, cfg.netWidth, FORMAT_RGB_PLANAR, DATA_TYPE_EXT_FLOAT32, 1);
-        planarImage2 = ctx->allocImagesWithoutMem(
-                            cfg.netBatch, cfg.netHeight, cfg.netWidth, FORMAT_RGB_PLANAR, DATA_TYPE_EXT_FLOAT32, 1);
-        bmcv_image_storage_convert(ctx->handle, 1, cfg.cropedImages.data(), planarImage1.data());      
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, planarImage1.data(), planarImage2.data());   
-        bmcv_image_storage_convert(ctx->handle, 1, planarImage2.data(), cfg.preOutImages.data());
-
-            // int* size = new int;
-
-            // bm_image_get_byte_size(cfg.preOutImages[0], size);
-            // auto buf2 = new void*[1];
-            // buf2[0] = new unsigned char[*size];
-            // bm_image_copy_device_to_host(cfg.preOutImages[0], buf2);
-            // delete [] buf2;
-
-        for(auto &p: planarImage1) {
-            bm_image_destroy(p);
+        std::vector<cv::Mat> input_channels; // batch_size * 3
+        toNCHW(cfg.sophonDev, resizeds, pInput, input_channels);
+        bm_memcpy_s2d(ctx->handle, *mem, pInput);
+    } else {    
+        for (int i = 0; i < resizeds.size(); i++){
+            void * buffers[1];
+            buffers[0] = resizeds[i].data;
+            bm_image_copy_host_to_device(cfg.preOutImages[i], buffers);
         }
-         for(auto &p: planarImage2) {
-            bm_image_destroy(p);
-        }
-
     }
-// r.record("destroy");    
-    //destroy temporary bm_image
-    for(auto &image: alignedInputs) {
-        bm_image_destroy(image);
-    }
-// r.show();
+    
     return true;
 }
 
@@ -173,7 +169,7 @@ bool resultProcess(const PostOutType& out, Top5AccuracyStat& stat,
     BM_ASSERT_EQ(out.rawIns.size(), out.classAndScores.size());
     for(size_t i=0; i<out.rawIns.size(); i++){
         auto& inName = out.rawIns[i];
-        auto realClass = refMap[baseName(out.rawIns[i])];
+        auto realClass = refMap[out.rawIns[i]];
         auto& classAndScores = out.classAndScores[i];
         auto firstClass = classAndScores[0].first;
         auto firstScore = classAndScores[0].second;
@@ -198,8 +194,8 @@ int main(int argc, char* argv[]){
     std::string topDir = "../";
     std::string dataPath = topDir + "data/ILSVRC2012/images";
     // std::string bmodel = topDir + "models/resnet50_v1/fix8b.bmodel";
+    // std::string bmodel = topDir + "models/resnet50_v1/compilation.bmodel";
     std::string bmodel = topDir + "models/resnet101/fp32.bmodel";
-    // std::string bmodel = topDir + "models/resnet50_v1/compilation_4n.bmodel";
     std::string refFile = topDir + "data/ILSVRC2012/val.txt";
     std::string labelFile = topDir + "data/ILSVRC2012/labels.txt";
     if(argc>1) dataPath = argv[1];
@@ -209,9 +205,13 @@ int main(int argc, char* argv[]){
     BMDevicePool<InType, PostOutType> runner(bmodel, preProcess, postProcess);
     runner.start();
     size_t batchSize= runner.getBatchSize();
-    auto refMap = loadClassRefs(refFile, "");
+    std::string prefix = dataPath;
+    if(prefix[prefix.size()-1] != '/'){
+        prefix += "/";
+    }
+    auto refMap = loadClassRefs(refFile, prefix);
     auto labelMap = loadLabels(labelFile);
-    ProcessStatInfo info("resnet");
+    ProcessStatInfo info("resnet50");
     Top5AccuracyStat topStat;
     std::thread dataThread([dataPath, batchSize, &runner](){
         forEachBatch(dataPath, batchSize, [&runner](const InType& imageFiles){
@@ -256,5 +256,40 @@ int main(int argc, char* argv[]){
     dataThread.join();
     resultThread.join();
     return 0;
+}
+
+
+/*
+    2021-09-23
+    BGR to RGB and 
+    nhwc to nchw
+    convert to fp32/int16
+    multiplied by input scale of quantization
+    subtracted by mean rgb value btw
+    rowType: cv::Vec3f(float), cv::Vec3b(uint8)
+    dstMat: width, height*3, CV_8UC1
+*/
+void fast_preprocess(cv::Mat& srcMat, cv::Mat& dstMat) {
+    int height = srcMat.size().height;
+    int width = srcMat.size().width;   
+    int numerator = 217;
+    int c_stride = height*width;
+    for (int i = 0; i < srcMat.rows; ++i) {
+		// pixel in ith row pointer
+		cv::Vec3b *p1 = srcMat.ptr<cv::Vec3b>(i); 
+		cv::Vec3b *pr = dstMat.ptr<cv::Vec3b>(i);
+        cv::Vec3b *pg = dstMat.ptr<cv::Vec3b>(i + height);
+        cv::Vec3b *pb = dstMat.ptr<cv::Vec3b>(i + height*2);
+		for(int j=0; j<srcMat.cols; ++j) { 
+			// exchange
+            short temp;
+			temp = (pr[j][2] * numerator)>>8 - 104;
+            pr[j] = (int8_t)temp; 
+			temp = (pg[j][1] * numerator)>>8 - 117;
+            pg[j] = (int8_t)temp; 
+			temp = (pb[j][0] * numerator)>>8 - 124;
+            pb[j] = (int8_t)temp;
+		}
+	} 
 }
 

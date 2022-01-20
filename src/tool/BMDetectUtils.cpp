@@ -58,13 +58,13 @@ std::vector<std::vector<DetectBox> > batchNMS(const std::vector<std::vector<Dete
 std::vector<DetectBox> singleNMS(const std::vector<DetectBox> &info, float iouThresh, size_t topk, bool useSoftNms, float sigma, bool agnosticNMS){
     std::map<size_t, std::vector<DetectBox>> classifiedInfo;
     std::vector<DetectBox> bestBoxes;
-    if(!agnosticNMS){
+    if(agnosticNMS){
       for(auto& i: info){
-        classifiedInfo[i.category].push_back(i);
+        classifiedInfo[i.imageId].push_back(i);
       }
     }else{
       for(auto& i: info){
-        classifiedInfo[i.imageId].push_back(i);
+        classifiedInfo[i.category].push_back(i);
       }
     }
 

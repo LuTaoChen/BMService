@@ -398,15 +398,16 @@ void aspectScaleAndPad(bm_handle_t handle,
         }
     }
 
-/*
-    2021-09-10
-    using opencv2
-*/
+/**
+ * @date 2022-01-20
+ * @brief using opencv2
+ * 
+ */
 void aspectScaleAndPad(cv::SophonDevice &device,
-                std::vector<cv::Mat>& srcImages,
-                std::vector<cv::Mat>& dstImages,
-                const cv::Scalar & value,
-                const cv::Size & dsize){
+                        std::vector<cv::Mat>& srcImages,
+                        std::vector<cv::Mat>& dstImages,
+                        const cv::Scalar & value,
+                        const cv::Size & dsize){
     int numImage = srcImages.size();
     // int dtype = srcImages[0].type();
     int dtype = CV_32FC3;
@@ -452,4 +453,48 @@ void aspectScaleAndPad(cv::SophonDevice &device,
     }
 }
 
+/**
+ * @brief from nhwc to nchw using opencv
+ * 
+ * @param srcImg all images size and dtype must equal to each other
+ * @param continuousData pointer to nchw data, must be continuous
+ * @param dstChannels will attached to continuousData
+ */
+void toNCHW(cv::SophonDevice&       device, 
+            std::vector<cv::Mat>&   srcImg, 
+            void*                   continuousData, 
+            std::vector<cv::Mat>&   dstChannels){
+    int w = srcImg[0].cols;
+    int h = srcImg[0].rows;
+    int dtype = srcImg[0].type();
+    for (int i = 0; i < srcImg.size(); i++){
+        assert(srcImg[i].cols == w && srcImg[i].rows == h);
+        assert(srcImg[i].type() == dtype && srcImg[i].type() == dtype);
+        if (dtype % 8 == 0 || dtype % 8 == 1) 
+        {
+            uchar *channel_base = (uchar *)continuousData + i*3*h*w;
+            for (int i = 0; i < 3; i++) {
+                cv::Mat channel(h, w, CV_8UC1, channel_base);
+                dstChannels.push_back(channel);
+                channel_base += h * w;
+            }
+        } 
+        else if(dtype % 8 == 4 || dtype % 8 == 5) 
+        {
+            float *channel_base = (float *)continuousData + i*3*h*w;
+            for (int i = 0; i < 3; i++) {
+                cv::Mat channel(h, w, CV_32FC1, channel_base);
+                dstChannels.push_back(channel);
+                channel_base += h * w;
+            }
+        }
+        else
+        {
+            std::cout << "ERROR: NOT SUPPORT TYPE!" << std::endl;
+            std::exit(0);
+        }
+        cv::split(srcImg, dstChannels);
+        std::cout << "Convert to NCHW complited ! ..." << std::endl;
+    }
+}
 }

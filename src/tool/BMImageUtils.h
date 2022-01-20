@@ -38,14 +38,14 @@ void aspectRsize(cv::SophonDevice &device,
                 std::vector<cv::Mat>& dstImages, 
                 int lowerBound = 224);
 
-// for vgg and resnet and so on
+
 void centralCrop(bm_handle_t handle,
                 std::vector<bm_image>& srcImages,
                 std::vector<bm_image>& dstImages);
 
 void centralCrop(std::vector<cv::Mat>& srcImages, std::vector<cv::Mat>& dstImages);
 
-// for yolov
+
 void aspectScaleAndPad(bm_handle_t handle,
                         std::vector<bm_image>& srcImages,
                         std::vector<bm_image>& dstImages,
@@ -62,30 +62,11 @@ void dumpImage(bm_image& bmImage, const std::string& name = "image.txt");
 
 std::map<size_t, std::string> loadLabels(const std::string& filename);
 std::map<std::string, size_t> loadClassRefs(const std::string& filename, const std::string& prefix="");
+
+void toNCHW(cv::SophonDevice &device, std::vector<cv::Mat>& srcImg, void *continuousData, std::vector<cv::Mat> &dstChannels);
+
 }
 
-/*
-    2021-09-17
-    OPENCV BGR to RGB
-    rowType: cv::Vec3f(float), cv::Vec3b(uint8)
-*/
-template<class rowType>
-void BGRToRGB_opencv(cv::Mat& srcMat, cv::Mat& dstMat) 
-{
-        for (int i = 0; i < srcMat.rows; ++i) 
-        { 
-		// pixel in ith row pointer
-		rowType *p1 = srcMat.ptr<rowType>(i); 
-		rowType *p2 = dstMat.ptr<rowType>(i);
-		for(int j=0; j<srcMat.cols; ++j) 
-		{ 
-			// exchange
-			p2[j][2] = p1[j][0]; 
-			p2[j][1] = p1[j][1]; 
-			p2[j][0] = p1[j][2]; 
-		}
-	} 
-}
 
 
 
