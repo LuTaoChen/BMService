@@ -126,15 +126,6 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
 
     aspectScaleAndPad(ctx->handle, *alignedInputs, cfg.resizedImages, color);
 
-        // int* size = new int;
-
-        // bm_image_get_byte_size(cfg.resizedImages[0], size);
-        // auto buf1 = new void*[1];
-        // buf1[0] = new unsigned char[*size];
-        // bm_image_copy_device_to_host(cfg.resizedImages[0], buf1);
-        // delete [] size;
-        // delete [] buf1;
-
 
     saveImage(cfg.resizedImages[0], "resize.jpg");
 
@@ -189,12 +180,6 @@ bool yoloV5BoxParse(DetectBox& box,
     box.ymin  = centerY - height / 2;
     box.xmax  = centerX + width / 2;
     box.ymax  = centerY + height / 2;
-
-    // box.xmin = (box.xmin - ci.wOffset)*ci.ioRatio;
-    // box.xmax = (box.xmax - ci.wOffset)*ci.ioRatio;
-    // box.ymin = (box.ymin - ci.hOffset)*ci.ioRatio;
-    // box.ymax = (box.ymax - ci.hOffset)*ci.ioRatio;
-
     if(box.xmin > box.xmax || box.ymin > box.ymax){
         return false;
     }
@@ -267,7 +252,7 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
             for(int anchor=0; anchor<anchors; anchor++){         
                 for(int grid_y=0; grid_y<grid_h; grid_y++){
                     for(int grid_x=0; grid_x<grid_w; grid_x++){
-                        auto rawOffset = anchor * a_stride + grid_y * h_stride + grid_x * w_stride;
+                        auto rawOffset = b * b_stride + anchor * a_stride + grid_y * h_stride + grid_x * w_stride;
                         auto rawBoxData = rawData + rawOffset;
                         auto& boxInfo = batchBoxInfos[b][batchIndice[b]];
                         if(yoloV5BoxParse(boxInfo,
@@ -348,10 +333,14 @@ int main(int argc, char* argv[]){
     std::string topDir = "../";
     // std::string dataPath = topDir + "data/coco/images";
     std::string dataPath = "/workspace/my/dataset/coco/images/oneImg";
-    std::string bmodel = topDir + "models/yolov5x/yolov5x_1b_int8.bmodel";
+    std::string bmodel = topDir + "models/yolov5s/yolov5s_4b_int8.bmodel";
     std::string refFile = topDir+ "data/coco/instances_val2017.json";
     std::string labelFile = topDir + "data/coco/coco_val2017.names";
     if(argc>1) dataPath = argv[1];
+    if(argc>2) bmodel = argv[2];
+    if(argc>3) refFile = argv[3];
+    if(argc>4) labelFile = argv[4];
+
     std::vector<DetectBox> allPredictions;
     globalGroundTruth =  readCocoDatasetBBox(refFile);
 
