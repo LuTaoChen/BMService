@@ -46,12 +46,16 @@ std::vector<std::vector<DetectBox>> batchNMS(const std::vector<std::vector<Detec
 
 
 template <typename T, typename Pred = std::function<T(const T &)>>
-size_t argmax(const T *data, size_t len, Pred pred = [](const T &v){ return v; }){
-    size_t maxIndex = 0;
-    for(size_t i=1; i<len; i++){
-        if(pred(data[maxIndex])<pred(data[i])) {
-            maxIndex = i;
-        }
+int argmax(const T *data, 
+              size_t len, 
+              size_t stride = 1,
+              Pred pred = [](const T &v){ return v;}){
+    int maxIndex = 0;
+    for(size_t i = 1; i < len; i++){
+      int idx = i * stride;
+      if (pred(data[maxIndex * stride]) < pred(data[idx])) {
+          maxIndex = i;
+      }
     }
     return maxIndex;
 }

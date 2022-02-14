@@ -219,7 +219,7 @@ void drawDetectBoxEx(bm_image &bmImage, const std::vector<DetectBox> &boxes, con
         int baseLine;
         cv::Size labelSize = getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
         auto top = std::max((int)box.ymin, labelSize.height);
-        cv::putText(cvImage, label, cv::Point(box.xmin, top), cv::FONT_HERSHEY_COMPLEX_SMALL, 1, cv::Scalar(0, 0, 255), 1);
+        cv::putText(cvImage, label, cv::Point(box.xmin, top), cv::FONT_HERSHEY_COMPLEX_SMALL, 1, cv::Scalar(0, 0, 255), 2);
         BMLOG(INFO, "  box #%d: [%d, %d, %d, %d], %s", i,
               (size_t)box.xmin, (size_t)box.ymin, (size_t)box.xmax, (size_t)box.ymax,
               label.c_str());

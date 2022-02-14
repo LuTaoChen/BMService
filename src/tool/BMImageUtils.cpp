@@ -409,8 +409,8 @@ void aspectScaleAndPad(cv::SophonDevice &device,
                         const cv::Scalar & value,
                         const cv::Size & dsize){
     int numImage = srcImages.size();
-    // int dtype = srcImages[0].type();
-    int dtype = CV_32FC3;
+    int dtype = srcImages[0].type();
+    // int dtype = CV_32FC3;
     int dstH = dsize.height;
     int dstW = dsize.width;
 
