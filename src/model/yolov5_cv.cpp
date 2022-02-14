@@ -34,7 +34,7 @@ struct YOLOv5Config {
 
 
     // use static to cache resizedImage, to avoid allocating memory everytime
-    const cv::Size dsize = cv::Size(640, 640);
+    cv::Size dsize = cv::Size(640, 640);
 
     // bmcv_image_convert_to do not support RGB_PACKED format directly
     // use grayImages as a RGB_PACKED wrapper
@@ -49,6 +49,7 @@ struct YOLOv5Config {
     float probThreshold;
     float iouThreshold;
     const size_t classNum = 80;
+    float input_scale;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
         if(initialized) return;
@@ -59,27 +60,17 @@ struct YOLOv5Config {
 
         ctx->setConfigData(this);
         isNCHW = inTensor->shape(1) == 3;
-        float input_scale = 1.0;
+        input_scale = 1.0;
         if(inTensor->get_dtype() == BM_FLOAT32){
             netDtype = DATA_TYPE_EXT_FLOAT32; 
             probThreshold = 0.5;
             iouThreshold = 0.5;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
-            probThreshold = 0.001;
+            probThreshold = 0.5;
             iouThreshold = 0.5;
             input_scale = inTensor->get_scale();
         }
-        float scale = 1.0/255;
-        float bias = 0;
-        float real_scale = scale * input_scale;
-        float real_bias = bias * input_scale;
-        ConvertAttr.alpha_0 = real_scale;
-        ConvertAttr.beta_0 = real_bias;
-        ConvertAttr.alpha_1 = real_scale;
-        ConvertAttr.beta_1 = real_bias;
-        ConvertAttr.alpha_2 = real_scale;
-        ConvertAttr.beta_2 = real_bias;
 
         if(!isNCHW){
             std::cout<<"is nhwc"<<std::endl;
@@ -104,6 +95,8 @@ struct YOLOv5Config {
 
         planar = ctx->allocImagesWithoutMem(
                             netBatch, netHeight, netWidth, netFormat, DATA_TYPE_EXT_1N_BYTE, 1);
+        dsize.height = netHeight;
+        dsize.width = netWidth;
 
     }
 };
@@ -118,82 +111,73 @@ struct PostOutType {
 
 using RunnerType = BMDevicePool<InType, PostOutType>;
 
+/**
+ * @brief   1.
+ *          2.
+ *          3.
+ * 
+ * @param in 
+ * @param inTensors 
+ * @param ctx 
+ * @return true 
+ * @return false 
+ */
 bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     if(in.empty()) return false;
+    const cv::Scalar color(114, 114, 114);
     BM_ASSERT_EQ(inTensors.size(), 1);
     auto inTensor = inTensors[0];
     BM_ASSERT_EQ(inTensor->dims(), 4);
 
     thread_local static YOLOv5Config cfg;
     cfg.initialize(inTensor, ctx);
-
+    const bm_device_mem_t * mem = inTensor->get_device_mem();
 
     std::vector<cv::Mat> cvImages;
     std::vector<cv::Mat> resizedImages;
     std::vector<std::pair<int, int>> * img0Info = new std::vector<std::pair<int, int>>;
+
     for(auto imageName: in){
-        cv::Mat u8Mat = cv::imread(imageName, cv::ImreadModes::IMREAD_COLOR, cfg.devId); 
-        cvImages.push_back(u8Mat);
-        img0Info->push_back(std::pair<int, int>(u8Mat.rows, u8Mat.cols));
+        cv::Mat cvMat = cv::imread(imageName, cv::ImreadModes::IMREAD_COLOR, cfg.devId); 
+        cvMat.convertTo(cvMat, CV_32FC3); // uint8 to float32 dtype conversion
+        cvImages.push_back(cvMat);
+        img0Info->push_back(std::pair<int, int>(cvMat.rows, cvMat.cols));
     }
-    const cv::Scalar color(114, 114, 114);
+
+    /* todo: remove this part */
+    std::vector<bm_image> * alignedInputs = new std::vector<bm_image>;
+    for(auto imageName: in){
+        auto image = readAlignedImage(ctx->handle, imageName);
+        alignedInputs->push_back(image);
+    }  
 
     aspectScaleAndPad(cfg.sophonDev, cvImages, resizedImages, color, cfg.dsize);
-
-//    saveImage(cfg.resizedImages[0], ".jpg");
-
-    auto mem = inTensor->get_device_mem();
-    bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
-
-    for (int i=0; i<cfg.netBatch; i++){
-        bm_image bm_resized;
-        if(cfg.netDtype == DATA_TYPE_EXT_FLOAT32){
-            resizedImages[i].convertTo(resizedImages[i], CV_32FC3); // uint8 to float32 dtype conversion
-            cv::bmcv::toBMI(resizedImages[i], &bm_resized);
-        }
-        else if(cfg.netDtype == DATA_TYPE_EXT_1N_BYTE_SIGNED){
-            cv::Mat qqq = resizedImages[i];
-            resizedImages[i].convertTo(resizedImages[i], CV_8UC3);
-            cv::bmcv::toBMI(resizedImages[i], &bm_resized); 
-        }
-        cfg.bm_resizeds.push_back(bm_resized);
-        // saveImage(bm_resized, "a.jpg");
-    }
-    if(cfg.isNCHW){
-        bmcv_image_storage_convert(ctx->handle, in.size(), cfg.bm_resizeds.data(), cfg.planar.data());
-        // saveImage(cfg.planar[0], "b.jpg");
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, cfg.planar.data(), cfg.preOutImages.data());
-        // saveImage(cfg.preOutImages[0], "c.jpg");
-    } else {
-        bmcv_image_convert_to(ctx->handle, in.size(), cfg.ConvertAttr, cfg.grayImages.data(), cfg.preOutImages.data());
+    
+    // // to NCHW
+    // int8_t *ptr_base = new int8_t[cfg.netHeight * cfg.netWidth * 3 * cfg.netBatch];
+    // int8_t *ptr = ptr_base;
+    // for (int b = 0; b < cfg.netBatch; b++) {
+    //     std::vector<cv::Mat> Channels;
+    //     for (int c = 0; c < 3; c++){
+    //         cv::Mat channel(cfg.netHeight, cfg.netWidth, CV_8SC1, ptr);
+    //         Channels.push_back(channel);
+    //         ptr += cfg.netHeight * cfg.netWidth;
+    //     }
+    //     resizedImages[b] = resizedImages[b] / 255 * cfg.input_scale;
+    //     resizedImages[b].convertTo(resizedImages[b], CV_8SC3);
+    //     cv::split(resizedImages[b], Channels);
+    // }
+    void* pInput;
+    std::vector<cv::Mat> input_channels; // batch_size * 3
+    for (int b = 0; b < cfg.netBatch; b++) {
+        resizedImages[b].convertTo(resizedImages[b], CV_8SC3, cfg.input_scale / 255);
     }
 
-    // pass input info to post process
-    ctx->setPreExtra(img0Info);
+    // toNCHW(cfg.sophonDev, resizedImages, pInput, input_channels);
+    // bm_memcpy_s2d(ctx->handle, *mem, pInput);
 
-    //destroy temporary bm_image
-
-    for(int i=0; i<cfg.netBatch; i++){  
-        // copy to host to debug
-        /*int* size = new int;
-
-        bm_image_get_byte_size(bm_linears[i], size);
-        auto buf1 = new void*[1];
-        buf1[0] = new unsigned char[*size];
-        bm_image_copy_device_to_host(bm_linears[i], buf1);
-
-        bm_image_get_byte_size(cfg.preOutImages[i], size);
-        auto buf2 = new void*[1];
-        buf2[0] = new unsigned char[*size];
-        bm_image_copy_device_to_host(cfg.preOutImages[i], buf2);
-
-        delete [] buf1;
-        delete [] buf2;   
-        delete [] size;
-        */
-       bm_image_destroy(cfg.bm_resizeds[i]);
-    }
-    cfg.bm_resizeds.clear();
+    ctx->setPreExtra(alignedInputs);
+    // delete ptr;
     return true;
 }
 
@@ -236,11 +220,6 @@ bool yoloV5BoxParse(DetectBox& box,
     box.xmax  = centerX + width / 2;
     box.ymax  = centerY + height / 2;
 
-    // box.xmin = (box.xmin - ci.wOffset)*ci.ioRatio;
-    // box.xmax = (box.xmax - ci.wOffset)*ci.ioRatio;
-    // box.ymin = (box.ymin - ci.hOffset)*ci.ioRatio;
-    // box.ymax = (box.ymax - ci.hOffset)*ci.ioRatio;
-
     if(box.xmin > box.xmax || box.ymin > box.ymax){
         return false;
     }
@@ -257,7 +236,7 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     auto pCfg = (YOLOv5Config*)ctx->getConfigData();
     auto& cfg = *pCfg;
 
-    auto pImg0Info = reinterpret_cast<std::vector<std::pair<int, int>>*>(ctx->getPostExtra());
+    auto pInputImages = reinterpret_cast<std::vector<bm_image>*>(ctx->getPostExtra());
     auto realBatch = rawIn.size();
     auto outTensor = outTensors[0];
     size_t batch = outTensor->shape(0);
@@ -267,14 +246,14 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     size_t classNum = outTensor->shape(4)-5;
     auto singleDataSize = outTensor->shape(4);
     BM_ASSERT_EQ(classNum, cfg.classNum);
-    BM_ASSERT_EQ(batch, pImg0Info->size());
+    BM_ASSERT_EQ(batch, pInputImages->size());
 
     std::vector<CoordConvertInfo> coordInfos(batch);
     for(size_t b=0; b<realBatch; b++){
         auto& ci = coordInfos[b];
 
-        ci.inputWidth = (*pImg0Info)[b].second;
-        ci.inputHeight = (*pImg0Info)[b].first;
+        ci.inputWidth = (*pInputImages)[b].width;
+        ci.inputHeight = (*pInputImages)[b].height;
         ci.ioRatio = std::max((float)ci.inputWidth/cfg.netWidth,
                                (float)ci.inputHeight/cfg.netHeight);
         ci.oiRatio = 1/ci.ioRatio;
@@ -355,13 +334,19 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
         }
     }
 
-    // for(size_t b=0; b<batch; b++){
-    //     auto name = baseName(rawIn[b]);
-    //     drawDetectBoxEx(pInputImages->at(b), postOut.results[b], globalGroundTruth[name], cfg.savePath+"/"+name);
-    // }
+
+
+
+    for(size_t b=0; b<batch; b++){
+        auto name = baseName(rawIn[b]);
+        drawDetectBoxEx(pInputImages->at(b), postOut.results[b], globalGroundTruth[name], cfg.savePath+"/"+name);
+    }
 
     // clear extra data
-    delete pImg0Info;
+    for(size_t i=0; i<pInputImages->size(); i++) {
+        bm_image_destroy(pInputImages->at(i));
+    }
+    delete pInputImages;
     return true;
 }
 
