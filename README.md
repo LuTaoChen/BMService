@@ -8,7 +8,7 @@ BMService is a framework to pipeline the whole process include pre-process, forw
 
 all the `xxx.cpp` files in `src/model` will be compiling seperately as an executable application, named `BMService-xxx`
 
-## models
+## 一些模型转换
 
 From http://jira.bitmaincorp.vip/browse/AIF-137 comment added by tingliang.tan in  August 18, 2021
 ### 生成vgg16.pb和resnet50.pb
@@ -149,8 +149,23 @@ python freeze_squad.py --bert_config_file uncased_L-12_H-768_A-12/bert_config.js
 python3 -m bmnett --model squad_graph.pb --target BM1684 --shapes="[$MAX_BATCH,384], [$MAX_BATCH,384], [$MAX_BATCH,384]" --input_names="input_ids, input_mask, segment_ids" --descs="[0,int32,0,256],[1, int32, 0, 2], [2, int32, 0, 2]" --outdir squad_bmodel --v=4 --cmp=True
 ```
 
+#### deeplabv3 tensorflow model zoo 版本
+
+到这里下载模型
+https://github.com/tensorflow/models/blob/f670e89c47573d1f0465bd1a20b4c36dae064be1/research/deeplab/g3doc/model_zoo.md
+
+例如
+```shell
+wget http://download.tensorflow.org/models/deeplabv3_pascal_trainval_2018_01_04.tar.gz
+```
+
+fp32模型：
+```shell
+python3 -m bmnett --model "frozen_inference_graph.pb" --input_names "ImageTensor" --shapes "[1,513,513,3]" --desc="[0,uint8,0,256]" --target BM1684 --opt 1 --cmp False --outdir deeplabv3_tf_fp32 --v 4
+```
+
  ------------------------------------------------------------------------------------------------
-#### After finish the bmodels' compilation put then in the structure like
+#### After finish the bmodels' compilation put then into the structure like
 
 ```shell
 |-- bert_squad
@@ -172,7 +187,7 @@ python3 -m bmnett --model squad_graph.pb --target BM1684 --shapes="[$MAX_BATCH,3
     `-- yolov5x_1b_int8.bmodel
 ```
 
-## build
+## 编译可执行程序
 
 Clone this repository
 
