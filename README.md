@@ -24,8 +24,11 @@ BMSerice-xxx will be generated for running
 
 ## 运行
 cd BMService/build
+
 ./BMService-resnet [PATH TO IMAGES] [PATH_TO_BMODEL]  [PATH_TO_VALTXT] [PATH_TO_LABEL]
+
 ./BMService-yolov5 [PATH TO IMAGES] [PATH_TO_BMODEL] [PATH_TO_LABEL] [PATH_TO_COCONAMES]
+
 ./BMService-deeplabv3_tf [PATH TO IMAGES] [PATH_TO_BMODEL] [PATH_TO_LABEL]
 
 ## 模型编译
