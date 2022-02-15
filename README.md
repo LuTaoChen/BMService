@@ -21,6 +21,8 @@ make -j
 ```
 
 BMSerice-xxx will be generated for running
+## 模型编译
+ [COMPILATION.md](.github/COMPILATION.md)
 
 ## <div align="center">其它</div>
 
