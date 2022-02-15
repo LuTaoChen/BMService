@@ -152,3 +152,26 @@ VOC2012数据集
 ```shell
 python3 -m bmnett --model "frozen_inference_graph.pb" --input_names "ImageTensor" --shapes "[1,513,513,3]" --desc="[0,uint8,0,256]" --target BM1684 --opt 1 --cmp False --outdir deeplabv3_tf_fp32 --v 4
 ```
+
+ ------------------------------------------------------------------------------------------------
+## After finish the bmodels' compilation put then into the structure like
+
+```shell
+|-- bert_squad
+|   `-- fp32.bmodel
+|-- inception
+|   `-- fix8b.bmodel
+|-- resnet101
+|   `-- fix8b_4n.bmodel
+|-- resnet50_v1
+|   |-- fix8b.bmodel
+|   `-- fix8b_4n.bmodel
+|-- vgg16
+|   `-- fix8b.bmodel
+|-- yolov3
+|   `-- fix8b_b4.bmodel
+|-- yolov5s
+|  `-- yolov5s_1b_fp32.bmodel
+`-- yolov5x
+    `-- yolov5x_1b_int8.bmodel
+```
