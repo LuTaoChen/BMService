@@ -163,6 +163,8 @@ VOC2012
 把分割任务用的验证集ImageSets/Segmentation/val.txt里面的图片提取出来放到一个文件夹内，参考tool/extract_voc.py，修改脚本内的路径参数
 
 得到的文件夹用来验证
+
+### fp32模型编译
 ```shell
 python3 -m bmnett --model "frozen_inference_graph.pb" --input_names "ImageTensor" --shapes "[1,513,513,3]" --desc="[0,uint8,0,256]" --target BM1684 --opt 1 --cmp False --outdir deeplabv3_tf_fp32 --v 4
 ```
