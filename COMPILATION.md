@@ -146,8 +146,21 @@ https://github.com/tensorflow/models/blob/f670e89c47573d1f0465bd1a20b4c36dae064b
 wget http://download.tensorflow.org/models/deeplabv3_pascal_trainval_2018_01_04.tar.gz
 ```
 ### 数据集
-VOC2012数据集
+VOC2012数据集，其中数据集目录结构为
+```shell
+VOC2012
+|-- Annotations
+|-- ImageSets
+|   |-- Action
+|   |-- Layout
+|   |-- Main
+|   `-- Segmentation
+|-- JPEGImage
+|-- SegmentationClass
+|-- SegmentationObject
 
+```
+把分割任务用的验证集提取出来放到一个文件夹内，参考tool/extract_voc.py，程序运行参数使用这个文件夹
 ### 编译fp32模型：
 ```shell
 python3 -m bmnett --model "frozen_inference_graph.pb" --input_names "ImageTensor" --shapes "[1,513,513,3]" --desc="[0,uint8,0,256]" --target BM1684 --opt 1 --cmp False --outdir deeplabv3_tf_fp32 --v 4
