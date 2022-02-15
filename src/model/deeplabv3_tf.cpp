@@ -222,7 +222,7 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     auto pImg0Info = reinterpret_cast<std::vector<std::pair<int, int>>*>(ctx->getPostExtra());
 
     auto realBatch = rawIn.size(); // number of dataset may not devided by batchsize 
-    auto outTensor = outTensors[1];
+    auto outTensor = outTensors[0];
     const bm_shape_t * out_shape = outTensor->get_shape();
     int batch = outTensor->shape(0);
     BM_ASSERT_EQ(batch, cfg.netBatch);
