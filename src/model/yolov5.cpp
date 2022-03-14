@@ -13,7 +13,7 @@
 
 using namespace bm;
 #define OUTPUT_RESULT_FILE  "yolov5_result.json"
-std::map<size_t, std::string> globalLabelMap;
+std::map<size_t, std::string> globalLabelMap;                          
 std::map<std::string, size_t> globalImageIdMap;
 std::map<size_t, size_t> categoryInCoco;
 std::map<std::string, std::vector<DetectBox>> globalGroundTruth;
@@ -49,6 +49,9 @@ struct YOLOv5Config {
     void initialize(TensorPtr inTensor, ContextPtr ctx){
         if(initialized) return;
         initialized = true;
+        std::string command;
+        command = "mkdir -p " + savePath;  
+        system(command.c_str());
         ctx->setConfigData(this);
         netBatch = inTensor->shape(0);
         isNCHW = inTensor->shape(1) == 3;
@@ -58,7 +61,7 @@ struct YOLOv5Config {
         float input_scale = 1.0;
         if(inTensor->get_dtype() == BM_FLOAT32){
             netDtype = DATA_TYPE_EXT_FLOAT32; 
-            probThreshold = 0.5;
+            probThreshold = 0.001;
             iouThreshold = 0.5;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
@@ -70,6 +73,7 @@ struct YOLOv5Config {
             netHeight = inTensor->shape(1);
             netWidth = inTensor->shape(2);
             netFormat = FORMAT_RGB_PACKED;
+
             BM_ASSERT_EQ(inTensor->shape(3), 3);
         }
         float scale = 1.0/255;
@@ -127,7 +131,7 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     aspectScaleAndPad(ctx->handle, *alignedInputs, cfg.resizedImages, color);
 
 
-    saveImage(cfg.resizedImages[0], "resize.jpg");
+    // saveImage(cfg.resizedImages[0], "resize.jpg");
 
     auto mem = inTensor->get_device_mem();
     bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
@@ -235,8 +239,8 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     std::vector<int> batchIndice(batch, 0);
     for(size_t i=0; i<outTensors.size(); i++){
         auto rawData = outTensors[i]->get_float_data();
-        size_t grid_w = outTensors[i]->shape(2);
-        size_t grid_h = outTensors[i]->shape(3);
+        size_t grid_w = outTensors[i]->shape(3);
+        size_t grid_h = outTensors[i]->shape(2);
         size_t area = grid_w*grid_h;
         auto boxNum = boxNums[i]; // 3*80*80
         
@@ -288,10 +292,10 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
         auto& ci = coordInfos[b];
         for(auto& r: postOut.results[b]) {
             r.imageId = imageId;
-            r.xmin = (r.xmin - ci.wOffset)*ci.ioRatio;
-            r.xmax = (r.xmax - ci.wOffset)*ci.ioRatio;
-            r.ymin = (r.ymin - ci.hOffset)*ci.ioRatio;
-            r.ymax = (r.ymax - ci.hOffset)*ci.ioRatio;
+            r.xmin = (r.xmin - ci.wOffset) * ci.ioRatio;
+            r.xmax = (r.xmax - ci.wOffset) * ci.ioRatio;
+            r.ymin = (r.ymin - ci.hOffset) * ci.ioRatio;
+            r.ymax = (r.ymax - ci.hOffset) * ci.ioRatio;
         }
     }
 

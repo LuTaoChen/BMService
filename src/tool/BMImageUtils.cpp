@@ -409,8 +409,8 @@ void aspectScaleAndPad(cv::SophonDevice &device,
                         const cv::Scalar & value,
                         const cv::Size & dsize){
     int numImage = srcImages.size();
-    int dtype = srcImages[0].type();
-    // int dtype = CV_32FC3;
+    // int dtype = srcImages[0].type();
+    int dtype = CV_32FC3;
     int dstH = dsize.height;
     int dstW = dsize.width;
 
@@ -453,38 +453,32 @@ void aspectScaleAndPad(cv::SophonDevice &device,
     }
 }
 
-/**
- * @brief from nhwc to nchw using opencv
- * 
- * @param srcImg all images size and dtype must equal to each other
- * @param continuousData pointer to nchw data, must be continuous
- * @param dstChannels will attached to continuousData
- */
-void toNCHW(cv::SophonDevice&       device, 
-            std::vector<cv::Mat>&   srcImg, 
-            void*                   continuousData, 
-            std::vector<cv::Mat>&   dstChannels){
-    int w = srcImg[0].cols;
-    int h = srcImg[0].rows;
+
+void toNCHW(cv::SophonDevice&                   device, 
+            std::vector<cv::Mat>&               srcImg, 
+            void*                               continuousData, 
+            std::vector<std::vector<cv::Mat>>&  dstChannels){
     int dtype = srcImg[0].type();
-    for (int i = 0; i < srcImg.size(); i++){
-        assert(srcImg[i].cols == w && srcImg[i].rows == h);
-        assert(srcImg[i].type() == dtype && srcImg[i].type() == dtype);
+    for (int b = 0; b < srcImg.size(); b++){
+        int w = srcImg[b].cols;
+        int h = srcImg[b].rows;
+        assert(srcImg[b].cols == w && srcImg[b].rows == h);
+        assert(srcImg[b].type() == dtype && srcImg[b].type() == dtype);
         if (dtype % 8 == 0 || dtype % 8 == 1) 
         {
-            uchar *channel_base = (uchar *)continuousData + i*3*h*w;
+            char *channel_base = (char *)continuousData + b * h * w * 3;
             for (int i = 0; i < 3; i++) {
-                cv::Mat channel(h, w, CV_8UC1, channel_base);
-                dstChannels.push_back(channel);
+                cv::Mat channel(h, w, dtype, channel_base);
+                dstChannels[b].push_back(channel);
                 channel_base += h * w;
             }
         } 
         else if(dtype % 8 == 4 || dtype % 8 == 5) 
         {
-            float *channel_base = (float *)continuousData + i*3*h*w;
+            float *channel_base = (float *)continuousData + b * h * w * 3;
             for (int i = 0; i < 3; i++) {
-                cv::Mat channel(h, w, CV_32FC1, channel_base);
-                dstChannels.push_back(channel);
+                cv::Mat channel(h, w, dtype, channel_base);
+                dstChannels[b].push_back(channel);
                 channel_base += h * w;
             }
         }
@@ -493,7 +487,7 @@ void toNCHW(cv::SophonDevice&       device,
             std::cout << "ERROR: NOT SUPPORT TYPE!" << std::endl;
             std::exit(0);
         }
-        cv::split(srcImg, dstChannels);
+        cv::split(srcImg[b], dstChannels[b]);
         std::cout << "Convert to NCHW complited ! ..." << std::endl;
     }
 }

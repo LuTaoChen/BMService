@@ -63,7 +63,14 @@ void dumpImage(bm_image& bmImage, const std::string& name = "image.txt");
 std::map<size_t, std::string> loadLabels(const std::string& filename);
 std::map<std::string, size_t> loadClassRefs(const std::string& filename, const std::string& prefix="");
 
-void toNCHW(cv::SophonDevice &device, std::vector<cv::Mat>& srcImg, void *continuousData, std::vector<cv::Mat> &dstChannels);
+/**
+ * @brief from nhwc to nchw using opencv
+ * 
+ * @param srcImg all images size and dtype must equal to each other
+ * @param continuousData pointer to nchw data, must be continuous
+ * @param dstChannels will attached to continuousData
+ */
+void toNCHW(cv::SophonDevice &device, std::vector<cv::Mat>& srcImg, void *continuousData, std::vector<std::vector<cv::Mat>>& dstChannels);
 
 }
 
