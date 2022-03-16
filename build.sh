@@ -2,8 +2,8 @@
 
 mkdir -p build
 cd build
-cmake ../
+TARGET_ARCH=x86-pcie cmake ../
 make -j
-cp libbmservice.so ../python/bmservice/lib
+make install
 cd ..
 

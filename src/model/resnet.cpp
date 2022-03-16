@@ -127,9 +127,9 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
         for(auto &p: planarImage1) {
             bm_image_destroy(p);
         }
-         for(auto &p: planarImage2) {
-            bm_image_destroy(p);
-        }
+        // for(auto &p: planarImage2) {
+        //     bm_image_destroy(p);
+        // }
 
     }
 // r.record("destroy");    

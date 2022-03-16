@@ -1,3 +1,14 @@
+/**
+ * @file myYolov5.cpp
+ * @author your name (you@domain.com)
+ * @brief as long as out put shape = [b, c * (cls + 5), h, w]
+ * @version 0.1
+ * @date 2022-01-21
+ * 
+ * @copyright Copyright (c) 2022
+ * 
+ */
+
 #include <dirent.h>
 #include<vector>
 #include<map>
@@ -10,10 +21,11 @@
 #include "BMImageUtils.h"
 #include "BMDetectUtils.h"
 #include "bmcv_api.h"
+#include <type_traits>
 
 using namespace bm;
 #define OUTPUT_RESULT_FILE  "yolov5_result.json"
-std::map<size_t, std::string> globalLabelMap;                          
+std::map<size_t, std::string> globalLabelMap;
 std::map<std::string, size_t> globalImageIdMap;
 std::map<size_t, size_t> categoryInCoco;
 std::map<std::string, std::vector<DetectBox>> globalGroundTruth;
@@ -21,13 +33,15 @@ std::map<std::string, std::vector<DetectBox>> globalGroundTruth;
 struct YOLOv5Config {
     bool initialized = false;
     bool isNCHW;
+    int anchors = 3;
+    int detHeads = 3;
+    int classNum = 80;
     size_t netBatch;
     size_t netHeight;
     size_t netWidth;
     bm_image_format_ext netFormat;
     bm_image_data_format_ext netDtype;
     bmcv_convert_to_attr ConvertAttr;
-    bmcv_convert_to_attr ConvertAttr2;
 
     // use static to cache resizedImage, to avoid allocating memory everytime
     std::vector<bm_image> resizedImages;
@@ -44,7 +58,6 @@ struct YOLOv5Config {
 
     float probThreshold;
     float iouThreshold;
-    const size_t classNum = 80;
 
     void initialize(TensorPtr inTensor, ContextPtr ctx){
         if(initialized) return;
@@ -61,7 +74,7 @@ struct YOLOv5Config {
         float input_scale = 1.0;
         if(inTensor->get_dtype() == BM_FLOAT32){
             netDtype = DATA_TYPE_EXT_FLOAT32; 
-            probThreshold = 0.001;
+            probThreshold = 0.5;
             iouThreshold = 0.5;
         } else {
             netDtype = DATA_TYPE_EXT_1N_BYTE_SIGNED;
@@ -73,7 +86,6 @@ struct YOLOv5Config {
             netHeight = inTensor->shape(1);
             netWidth = inTensor->shape(2);
             netFormat = FORMAT_RGB_PACKED;
-
             BM_ASSERT_EQ(inTensor->shape(3), 3);
         }
         float scale = 1.0/255;
@@ -129,9 +141,7 @@ bool preProcess(const InType& in, const TensorVec& inTensors, ContextPtr ctx){
     bmcv_color_t color = {114, 114, 114};
 
     aspectScaleAndPad(ctx->handle, *alignedInputs, cfg.resizedImages, color);
-
-
-    // saveImage(cfg.resizedImages[0], "resize.jpg");
+    saveImage(cfg.resizedImages[0], "resize.jpg");
 
     auto mem = inTensor->get_device_mem();
     bm_image_attach_contiguous_mem(in.size(), cfg.preOutImages.data(), *mem);
@@ -155,41 +165,49 @@ struct CoordConvertInfo {
     float wOffset;
 };
 
+template<typename T1, typename T2, typename T3>
 bool yoloV5BoxParse(DetectBox& box, 
-                        float* data, 
-                        size_t len, 
-                        float probThresh, 
-                        CoordConvertInfo& ci,  
-                        size_t grid_x,
-                        size_t grid_y, 
-                        size_t tensor_idx,
-                        size_t anchor_idx,
-                        size_t grid_w,
-                        size_t grid_h,
-                        YOLOv5Config cfg){
-    size_t classNum = len - 5;
-    auto scores = &data[5];
-    int category;
-    category = argmax(scores, classNum);
-    box.confidence = sigmoid(data[4])* sigmoid(scores[category]);
-    if((box.confidence <= probThresh) ){
+                    T1 *data_xywh,
+                    T2 *data_obj,
+                    T3 *data_cls,
+                    float factor_xywh,
+                    float factor_obj,
+                    float factor_cls,
+                    int c_stride,
+                    size_t tensor_idx,
+                    size_t anchor_idx,
+                    size_t grid_idx,
+                    size_t grid_w,
+                    size_t grid_h,
+                    YOLOv5Config cfg){
+
+    float objectness = *((T2 *)data_obj) * factor_obj;
+    if (objectness < -log(1/(cfg.probThreshold) - 1)){ // objectness < 0 === sigmoid(obj) < 0.5
         return false;
     }
-
-    float centerX = (sigmoid(data[0]) * 2 - 0.5 + grid_x) * cfg.netWidth / grid_w;
-    float centerY = (sigmoid(data[1]) * 2 - 0.5 + grid_y) * cfg.netHeight / grid_h; //center_y
-    float width   = pow((sigmoid(data[2]) * 2), 2) * cfg.m_anchors[tensor_idx][anchor_idx][0]; //in w
-    float height  = pow((sigmoid(data[3]) * 2), 2) * cfg.m_anchors[tensor_idx][anchor_idx][1]; //in h
-    box.xmin  = centerX - width  / 2;
-    box.ymin  = centerY - height / 2;
-    box.xmax  = centerX + width / 2;
-    box.ymax  = centerY + height / 2;
-    if(box.xmin > box.xmax || box.ymin > box.ymax){
+    int category = argmax(data_cls, cfg.classNum, c_stride);
+    float cls_prob = (data_cls[category * c_stride]) * factor_cls;    
+    // float confidence = sigmoid(objectness) * sigmoid(cls_prob);
+    float confidence = sigmoid(objectness);
+    if (objectness < cfg.probThreshold){ 
         return false;
     }
-
-    box.category = categoryInCoco[category];
+    float x = *(data_xywh) * factor_xywh;
+    float y = *(data_xywh + c_stride) * factor_xywh;
+    float w = *(data_xywh + 2 * c_stride) * factor_xywh;
+    float h = *(data_xywh + 3 * c_stride) * factor_xywh;
+    box.confidence = confidence;
+    box.category = categoryInCoco[category];;
     box.categoryName = globalLabelMap[category];
+
+    x = (sigmoid(x) * 2 + grid_idx % grid_w - 0.5) * cfg.netWidth / grid_w;
+    y = (sigmoid(y) * 2 + grid_idx / grid_w - 0.5) * cfg.netWidth / grid_h;
+    w = pow(sigmoid(w) * 2, 2) * cfg.m_anchors[tensor_idx][anchor_idx][0];
+    h = pow(sigmoid(h) * 2, 2) * cfg.m_anchors[tensor_idx][anchor_idx][1];
+    box.xmin  = x - w / 2;
+    box.ymin  = y - h / 2;
+    box.xmax  = x + w / 2;
+    box.ymax  = y + h / 2;
 
     return true;
 }
@@ -204,12 +222,10 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
     auto realBatch = rawIn.size();
     auto outTensor = outTensors[0];
     size_t batch = outTensor->shape(0);
-    size_t anchors = outTensor->shape(1);
     std::vector<size_t> boxNums(outTensors.size());
     size_t totalBoxNum=0;
-    size_t classNum = outTensor->shape(4)-5;
     auto singleDataSize = outTensor->shape(4);
-    BM_ASSERT_EQ(classNum, cfg.classNum);
+    BM_ASSERT_EQ(cfg.classNum, cfg.classNum);
     BM_ASSERT_EQ(batch, pInputImages->size());
 
     std::vector<CoordConvertInfo> coordInfos(batch);
@@ -225,11 +241,9 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
         ci.hOffset = (cfg.netHeight - ci.oiRatio * ci.inputHeight)/2;
         ci.wOffset = (cfg.netWidth - ci.oiRatio * ci.inputWidth)/2;
     }
-
-    for(size_t i=0; i<outTensors.size(); i++){
-        auto tensor = outTensors[i];
+    for(size_t i = 0; i < cfg.detHeads; i++){
+        auto tensor = outTensors[i * 3 + 1]; // cls
         BM_ASSERT_EQ(batch, tensor->shape(0));
-        BM_ASSERT_EQ(classNum, tensor->shape(4)-5);
         boxNums[i] = tensor->partial_shape_count(1,3);
         totalBoxNum += boxNums[i];
     }
@@ -237,42 +251,52 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
 
     // fill batchBoxInfo
     std::vector<int> batchIndice(batch, 0);
-    for(size_t i=0; i<outTensors.size(); i++){
-        auto rawData = outTensors[i]->get_float_data();
-        size_t grid_w = outTensors[i]->shape(3);
-        size_t grid_h = outTensors[i]->shape(2);
-        size_t area = grid_w*grid_h;
-        auto boxNum = boxNums[i]; // 3*80*80
+    for(size_t head_id = 0; head_id < cfg.detHeads; head_id++){
+        uchar *xywh = outTensors[head_id]->get_raw_data();
+        uchar *obj = outTensors[head_id + 3]->get_raw_data();
+        uchar *cls = outTensors[head_id + 6]->get_raw_data();
+        float factor_xywh = outTensors[head_id]->get_scale();
+        float factor_obj = outTensors[head_id + 3]->get_scale();
+        float factor_cls = outTensors[head_id + 6]->get_scale();
+        auto xywh_t = outTensors[head_id * 3]->get_shape();
+        int obj_t = outTensors[head_id * 3 + 1]->get_dtype();
+        int cls_t = outTensors[head_id * 3]->get_dtype();
+        size_t grid_w = outTensors[head_id]->shape(3);
+        size_t grid_h = outTensors[head_id]->shape(2);
+        auto boxNum = boxNums[head_id]; // 3 * 80 * 80, 3 * 40 * 40, 3 * 20 * 20
         
-        // when output shape equal to [b, a, h, w, xywh+obj+cls]
-        size_t bbox_len = outTensors[i]->shape(4);
-        size_t w_stride = bbox_len;
-        size_t h_stride = grid_w * w_stride;
-        size_t a_stride = grid_h * h_stride;
-        size_t b_stride = anchors * a_stride;
+        int c_stride = grid_h * grid_w;
+        int a_stride_xywh = 4 * c_stride;
+        int a_stride_obj = 1 * c_stride;
+        int a_stride_cls = cfg.classNum * c_stride;
+        int b_stride_xywh = cfg.anchors * a_stride_xywh;
+        int b_stride_obj = cfg.anchors * a_stride_obj;
+        int b_stride_cls = cfg.anchors * a_stride_cls;
         
         for(size_t b=0; b<batch; b++){
-            auto& ci = coordInfos[b];
-            for(int anchor=0; anchor<anchors; anchor++){         
-                for(int grid_y=0; grid_y<grid_h; grid_y++){
-                    for(int grid_x=0; grid_x<grid_w; grid_x++){
-                        auto rawOffset = b * b_stride + anchor * a_stride + grid_y * h_stride + grid_x * w_stride;
-                        auto rawBoxData = rawData + rawOffset;
-                        auto& boxInfo = batchBoxInfos[b][batchIndice[b]];
-                        if(yoloV5BoxParse(boxInfo,
-                                        rawBoxData,
-                                        singleDataSize, 
-                                        cfg.probThreshold, 
-                                        ci, 
-                                        grid_x, 
-                                        grid_y, 
-                                        i, 
+            auto& ci = coordInfos[b];   
+            for(int anchor = 0; anchor < cfg.anchors; anchor++){         
+                for(int i = 0; i < c_stride; i++){
+                    auto *box_x = (int8_t *)xywh + b * b_stride_xywh + anchor * a_stride_xywh + i;
+                    auto *box_obj = (int8_t *)obj + b * b_stride_obj + anchor * a_stride_obj + i;
+                    auto *box_cls = (int8_t *)cls + b * b_stride_cls + anchor * a_stride_cls + i;
+                    
+                    auto& boxInfo = batchBoxInfos[b][batchIndice[b]];
+                    if(yoloV5BoxParse(boxInfo,
+                                        box_x,
+                                        box_obj,
+                                        box_cls,
+                                        factor_xywh,
+                                        factor_obj,
+                                        factor_cls,
+                                        c_stride,
+                                        head_id,
                                         anchor, 
+                                        i,
                                         grid_w, 
                                         grid_h,
                                         cfg)){
-                            batchIndice[b]++;
-                        }
+                        batchIndice[b]++;
                     }
                 }
             }
@@ -292,17 +316,17 @@ bool postProcess(const InType& rawIn, const TensorVec& outTensors, PostOutType& 
         auto& ci = coordInfos[b];
         for(auto& r: postOut.results[b]) {
             r.imageId = imageId;
-            r.xmin = std::max((r.xmin - ci.wOffset) * ci.ioRatio, 0.0f);
-            r.xmax = std::max((r.xmax - ci.wOffset) * ci.ioRatio, 0.0f);
-            r.ymin = std::max((r.ymin - ci.hOffset) * ci.ioRatio, 0.0f);
-            r.ymax = std::max((r.ymax - ci.hOffset) * ci.ioRatio, 0.0f);
+            r.xmin = (r.xmin - ci.wOffset) * ci.ioRatio;
+            r.xmax = (r.xmax - ci.wOffset) * ci.ioRatio;
+            r.ymin = (r.ymin - ci.hOffset) * ci.ioRatio;
+            r.ymax = (r.ymax - ci.hOffset) * ci.ioRatio;
         }
     }
 
-    // for(size_t b=0; b<batch; b++){
-    //     auto name = baseName(rawIn[b]);
-    //     drawDetectBoxEx(pInputImages->at(b), postOut.results[b], globalGroundTruth[name], cfg.savePath+"/"+name);
-    // }
+    for(size_t b=0; b<batch; b++){
+        auto name = baseName(rawIn[b]);
+        drawDetectBoxEx(pInputImages->at(b), postOut.results[b], globalGroundTruth[name], cfg.savePath+"/"+name);
+    }
 
     // clear extra data
     for(size_t i=0; i<pInputImages->size(); i++) {
@@ -335,9 +359,9 @@ bool resultProcess(const PostOutType& out, std::vector<DetectBox>& allPrediction
 int main(int argc, char* argv[]){
     set_env_log_level(INFO);
     std::string topDir = "../";
-    // std::string dataPath = topDir + "data/coco/images";
-    std::string dataPath = "/workspace/my/dataset/coco/images/oneImg";
-    std::string bmodel = topDir + "models/yolov5s/yolov5s_4b_int8.bmodel";
+    std::string dataPath = topDir + "data/coco/images";
+    // std::string dataPath = "/workspace/my/dataset/coco/images/oneImg";
+    std::string bmodel = topDir + "models/yolov5s/myYolov5s_int8_bs4.bmodel";
     std::string refFile = topDir+ "data/coco/instances_val2017.json";
     std::string labelFile = topDir + "data/coco/coco_val2017.names";
     if(argc>1) dataPath = argv[1];

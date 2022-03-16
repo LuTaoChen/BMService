@@ -27,12 +27,13 @@ void centralCropAndResize(bm_handle_t handle,
                           float centralFactor = 0.875);
 
 
-// default resnet and vgg in tensorflow slim lib
+// default resnet and vgg in tensorflow slim
 void aspectRsize(bm_handle_t handle,
                 bm_image_format_ext netFormat,
                 std::vector<bm_image>& srcImages,
                 std::vector<bm_image>& dstImages,
                 int lowerBound = 224);
+
 void aspectRsize(cv::SophonDevice &device,
                 std::vector<cv::Mat>& srcImages, 
                 std::vector<cv::Mat>& dstImages, 
